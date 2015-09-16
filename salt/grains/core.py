@@ -479,7 +479,7 @@ def _virtual(osdata):
     skip_cmds = ('AIX',)
 
     # list of commands to be executed to determine the 'virtual' grain
-    _cmds = []
+    _cmds = ['systemd-detect-virt', 'virt-what', 'dmidecode']
     # test first for virt-what, which covers most of the desired functionality
     # on most platforms
     if not salt.utils.is_windows() and osdata['kernel'] not in skip_cmds:
@@ -492,16 +492,13 @@ def _virtual(osdata):
             )
     # Check if enable_lspci is True or False
     if __opts__.get('enable_lspci', True) is False:
-        _cmds += ['dmidecode', 'dmesg']
-    elif osdata['kernel'] in skip_cmds:
-        _cmds = ()
-    else:
         # /proc/bus/pci does not exists, lspci will fail
-        if not os.path.exists('/proc/bus/pci'):
-            _cmds = ['systemd-detect-virt', 'virt-what', 'dmidecode', 'dmesg']
-        else:
-            _cmds = ['systemd-detect-virt', 'virt-what', 'dmidecode', 'lspci',
-                     'dmesg']
+        if os.path.exists('/proc/bus/pci'):
+            _cmds += ['lspci']
+
+    # Add additional last resort commands
+    if osdata['kernel'] in skip_cmds:
+        _cmds = ()
 
     failed_commands = set()
     for command in _cmds:
@@ -579,7 +576,7 @@ def _virtual(osdata):
             elif 'hyperv' in output:
                 grains['virtual'] = 'HyperV'
                 break
-        elif command == 'dmidecode' or command == 'dmesg':
+        elif command == 'dmidecode':
             # Product Name: VirtualBox
             if 'Vendor: QEMU' in output:
                 # FIXME: Make this detect between kvm or qemu
@@ -643,7 +640,7 @@ def _virtual(osdata):
     else:
         if osdata['kernel'] in skip_cmds:
             log.warn(
-                'The tools \'dmidecode\', \'lspci\' and \'dmesg\' failed to '
+                'The tools \'dmidecode\' and \'lspci\' failed to '
                 'execute because they do not exist on the system of the user '
                 'running this instance or the user does not have the '
                 'necessary permissions to execute them. Grains output might '
@@ -725,6 +722,22 @@ def _virtual(osdata):
             with salt.utils.fopen('/proc/cpuinfo', 'r') as fhr:
                 if 'QEMU Virtual CPU' in fhr.read():
                     grains['virtual'] = 'kvm'
+        if os.path.isfile('/sys/devices/virtual/dmi/id/product_name'):
+            try:
+                with salt.utils.fopen('/sys/devices/virtual/dmi/id/product_name', 'r') as fhr:
+                    output = fhr.read()
+                    if 'VirtualBox' in output:
+                        grains['virtual'] = 'VirtualBox'
+                    elif 'RHEV Hypervisor' in output:
+                        grains['virtual'] = 'kvm'
+                        grains['virtual_subtype'] = 'rhev'
+                    elif 'oVirt Node' in output:
+                        grains['virtual'] = 'kvm'
+                        grains['virtual_subtype'] = 'ovirt'
+                    elif 'Google' in output:
+                        grains['virtual'] = 'gce'
+            except IOError:
+                pass
     elif osdata['kernel'] == 'FreeBSD':
         kenv = salt.utils.which('kenv')
         if kenv:
@@ -1300,6 +1313,7 @@ def os_data():
         grains['os'] = 'ESXi'
     elif grains['kernel'] == 'Darwin':
         osrelease = __salt__['cmd.run']('sw_vers -productVersion')
+        grains['os_build_version'] = __salt__['cmd.run']('sw_vers -buildVersion')
         grains['os'] = 'MacOS'
         grains['os_family'] = 'MacOS'
         grains['osrelease'] = osrelease

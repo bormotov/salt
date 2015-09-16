@@ -99,7 +99,6 @@ from salt.utils import http
 from salt import syspaths
 from salt.cloud.libcloudfuncs import *  # pylint: disable=redefined-builtin,wildcard-import,unused-wildcard-import
 from salt.exceptions import (
-    SaltCloudException,
     SaltCloudSystemExit,
 )
 
@@ -142,20 +141,21 @@ def __virtual__():
         pathname = os.path.expanduser(parameters['service_account_private_key'])
 
         if not os.path.exists(pathname):
-            raise SaltCloudException(
+            log.error(
                 'The GCE service account private key \'{0}\' used in '
                 'the \'{1}\' provider configuration does not exist\n'.format(
                     parameters['service_account_private_key'],
                     provider
                 )
             )
+            return False
 
         key_mode = str(
             oct(stat.S_IMODE(os.stat(pathname).st_mode))
         )
 
         if key_mode not in ('0400', '0600'):
-            raise SaltCloudException(
+            log.error(
                 'The GCE service account private key \'{0}\' used in '
                 'the \'{1}\' provider configuration needs to be set to '
                 'mode 0400 or 0600\n'.format(
@@ -163,6 +163,7 @@ def __virtual__():
                     provider
                 )
             )
+            return False
 
     return __virtualname__
 
@@ -1579,32 +1580,36 @@ def create_disk(kwargs=None, call=None):
             'The create_disk function must be called with -f or --function.'
         )
 
-    if not kwargs or 'location' not in kwargs:
+    if kwargs is None:
+        kwargs = {}
+
+    name = kwargs.get('disk_name', None)
+    image = kwargs.get('image', None)
+    location = kwargs.get('location', None)
+    size = kwargs.get('size', None)
+    snapshot = kwargs.get('snapshot', None)
+
+    if location is None:
         log.error(
             'A location (zone) must be specified when creating a disk.'
         )
         return False
 
-    if 'disk_name' not in kwargs:
+    if name is None:
         log.error(
             'A disk_name must be specified when creating a disk.'
         )
         return False
 
-    if 'size' not in kwargs:
-        if 'image' not in kwargs and 'snapshot' not in kwargs:
-            log.error(
-                'Must specify image, snapshot, or size.'
-            )
-            return False
+    if 'size' is None and 'image' is None and 'snapshot' is None:
+        log.error(
+            'Must specify image, snapshot, or size.'
+        )
+        return False
 
     conn = get_conn()
 
-    size = kwargs.get('size', None)
-    name = kwargs.get('disk_name')
     location = conn.ex_get_zone(kwargs['location'])
-    snapshot = kwargs.get('snapshot', None)
-    image = kwargs.get('image', None)
     use_existing = True
 
     salt.utils.cloud.fire_event(
@@ -1959,9 +1964,9 @@ def destroy(vm_name, call=None):
                 profile = md['value']
     vm_ = get_configured_provider()
     delete_boot_pd = False
-    if profile is not None and profile in vm_['profiles']:
-        if 'delete_boot_pd' in vm_['profiles'][profile]:
-            delete_boot_pd = vm_['profiles'][profile]['delete_boot_pd']
+
+    if profile and profile in vm_['profiles'] and 'delete_boot_pd' in vm_['profiles'][profile]:
+        delete_boot_pd = vm_['profiles'][profile]['delete_boot_pd']
 
     try:
         inst_deleted = conn.destroy_node(node)

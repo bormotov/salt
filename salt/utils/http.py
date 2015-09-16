@@ -238,8 +238,6 @@ def query(url,
     if not auth:
         if username and password:
             auth = (username, password)
-        else:
-            auth = None
 
     if agent == USERAGENT:
         agent = '{0} http.query()'.format(agent)
@@ -566,7 +564,6 @@ def get_ca_bundle(opts=None):
 
     # Check Salt first
     for salt_root in file_roots.get('base', []):
-        log.debug('file_roots is {0}'.format(salt_root))
         for path in ('cacert.pem', 'ca-bundle.crt'):
             if os.path.exists(path):
                 return path

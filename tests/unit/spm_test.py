@@ -29,11 +29,13 @@ __opts__ = {
     'spm_build_dir': os.path.join(_TMP_SPM, 'build'),
     'spm_build_exclude': ['.git'],
     'spm_db_provider': 'sqlite3',
-    'spm_files_provider': 'roots',
+    'spm_files_provider': 'local',
     'spm_db': os.path.join(_TMP_SPM, 'packages.db'),
     'extension_modules': os.path.join(_TMP_SPM, 'modules'),
-    'file_roots': {'base': [os.path.join(_TMP_SPM, 'salt')]},
-    'pillar_roots': {'base': [os.path.join(_TMP_SPM, 'pillar')]},
+    'file_roots': {'base': [_TMP_SPM, ]},
+    'formula_path': os.path.join(_TMP_SPM, 'spm'),
+    'pillar_path': os.path.join(_TMP_SPM, 'pillar'),
+    'reactor_path': os.path.join(_TMP_SPM, 'reactor'),
     'assume_yes': True,
     'force': False,
 }
@@ -127,12 +129,12 @@ class SPMTest(TestCase):
                 ('summary', 'Summary: {0}')):
             assert line.format(_F1['definition'][key]) in lines
         # Reinstall with force=False, should fail
-        self.ui._error.clear()
+        self.ui._error = []
         self.client.run(['local', 'install', pkgpath])
         assert len(self.ui._error) > 0
         # Reinstall with force=True, should succeed
         __opts__['force'] = True
-        self.ui._error.clear()
+        self.ui._error = []
         self.client.run(['local', 'install', pkgpath])
         assert len(self.ui._error) == 0
         __opts__['force'] = False
@@ -165,7 +167,7 @@ class SPMTest(TestCase):
         )
 
         for args in fail_args:
-            self.ui._error.clear()
+            self.ui._error = []
             self.client.run(args)
             assert len(self.ui._error) > 0
 

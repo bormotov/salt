@@ -29,6 +29,7 @@ from salt.utils.verify import check_user, verify_env, verify_files
 
 # Import salt.cloud libs
 import salt.cloud
+import salt.utils.cloud
 from salt.exceptions import SaltCloudException, SaltCloudSystemExit
 import salt.ext.six as six
 import salt.syspaths as syspaths
@@ -353,6 +354,40 @@ class SaltCloud(parsers.SaltCloudParser):
 
             except (SaltCloudException, Exception) as exc:
                 msg = 'There was a query error: {0}'
+                self.handle_exception(msg, exc)
+
+        elif self.options.bootstrap:
+            host = self.options.bootstrap
+            if len(self.args) > 0:
+                if '=' not in self.args[0]:
+                    minion_id = self.args.pop(0)
+                else:
+                    minion_id = host
+            else:
+                minion_id = host
+
+            vm_ = {
+                'driver': '',
+                'ssh_host': host,
+                'name': minion_id,
+            }
+            args = self.args[:]
+            for arg in args[:]:
+                if '=' in arg:
+                    key, value = arg.split('=', 1)
+                    vm_[key] = value
+                    args.remove(arg)
+
+            if args:
+                self.error(
+                    'Any arguments passed to --bootstrap need to be passed as '
+                    'kwargs. Ex: ssh_username=larry. Remaining arguments: {0}'.format(args)
+                )
+
+            try:
+                ret = salt.utils.cloud.bootstrap(vm_, self.config)
+            except (SaltCloudException, Exception) as exc:
+                msg = 'There was an error bootstrapping the minion: {0}'
                 self.handle_exception(msg, exc)
 
         else:
