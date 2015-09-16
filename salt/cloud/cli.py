@@ -4,22 +4,24 @@ Primary interfaces for the salt-cloud system
 '''
 # Need to get data from 4 sources!
 # CLI options
-# salt cloud config - /etc/salt/cloud
+# salt cloud config - CONFIG_DIR + '/cloud'
 # salt master config (for master integration)
-# salt VM config, where VMs are defined - /etc/salt/cloud.profiles
+# salt VM config, where VMs are defined - CONFIG_DIR + '/cloud.profiles'
 #
 # The cli, master and cloud configs will merge for opts
 # the VM data will be in opts['profiles']
 
 # Import python libs
 from __future__ import print_function
+from __future__ import absolute_import
 import os
 import sys
 import logging
+from salt.ext.six.moves import input
 
 # Import salt libs
 import salt.config
-import salt.exitcodes
+import salt.defaults.exitcodes
 import salt.output
 import salt.utils
 from salt.utils import parsers
@@ -27,8 +29,9 @@ from salt.utils.verify import check_user, verify_env, verify_files
 
 # Import salt.cloud libs
 import salt.cloud
-from salt.cloud.exceptions import SaltCloudException, SaltCloudSystemExit
-
+from salt.exceptions import SaltCloudException, SaltCloudSystemExit
+import salt.ext.six as six
+import salt.syspaths as syspaths
 log = logging.getLogger(__name__)
 
 
@@ -41,15 +44,21 @@ class SaltCloud(parsers.SaltCloudParser):
         # Parse shell arguments
         self.parse_args()
 
-        salt_master_user = self.config.get('user', salt.utils.get_user())
-        if salt_master_user is not None and not check_user(salt_master_user):
+        salt_master_user = self.config.get('user')
+        if salt_master_user is None:
+            salt_master_user = salt.utils.get_user()
+
+        if not check_user(salt_master_user):
             self.error(
                 'If salt-cloud is running on a master machine, salt-cloud '
-                'needs to run as the same user as the salt-master, {0!r}. If '
-                'salt-cloud is not running on a salt-master, the appropriate '
-                'write permissions must be granted to /etc/salt/. Please run '
-                'salt-cloud as root, {0!r}, or change permissions for '
-                '/etc/salt/.'.format(salt_master_user)
+                'needs to run as the same user as the salt-master, \'{0}\'. '
+                'If salt-cloud is not running on a salt-master, the '
+                'appropriate write permissions must be granted to \'{1}\'. '
+                'Please run salt-cloud as root, \'{0}\', or change '
+                'permissions for \'{1}\'.'.format(
+                    salt_master_user,
+                    syspaths.CONFIG_DIR
+                )
             )
 
         try:
@@ -77,10 +86,26 @@ class SaltCloud(parsers.SaltCloudParser):
                 self.options.output, self.config
             )
             print(display_output(ret))
-            self.exit(os.EX_OK)
+            self.exit(salt.defaults.exitcodes.EX_OK)
 
         log.info('salt-cloud starting')
-        mapper = salt.cloud.Map(self.config)
+        try:
+            mapper = salt.cloud.Map(self.config)
+        except SaltCloudException as exc:
+            msg = 'There was an error generating the mapper.'
+            self.handle_exception(msg, exc)
+
+        names = self.config.get('names', None)
+        if names is not None:
+            filtered_rendered_map = {}
+            for map_profile in mapper.rendered_map:
+                filtered_map_profile = {}
+                for name in mapper.rendered_map[map_profile]:
+                    if name in names:
+                        filtered_map_profile[name] = mapper.rendered_map[map_profile][name]
+                if filtered_map_profile:
+                    filtered_rendered_map[map_profile] = filtered_map_profile
+            mapper.rendered_map = filtered_rendered_map
 
         ret = {}
 
@@ -92,8 +117,18 @@ class SaltCloud(parsers.SaltCloudParser):
                     msg = 'There was an error listing providers: {0}'
                     self.handle_exception(msg, exc)
 
+            elif self.selected_query_option == 'list_profiles':
+                provider = self.options.list_profiles
+                try:
+                    ret = mapper.profile_list(provider)
+                except(SaltCloudException, Exception) as exc:
+                    msg = 'There was an error listing profiles: {0}'
+                    self.handle_exception(msg, exc)
+
             elif self.config.get('map', None):
-                log.info('Applying map from {0!r}.'.format(self.config['map']))
+                log.info(
+                    'Applying map from \'{0}\'.'.format(self.config['map'])
+                )
                 try:
                     ret = mapper.interpolated_map(
                         query=self.selected_query_option
@@ -139,24 +174,33 @@ class SaltCloud(parsers.SaltCloudParser):
 
         elif self.options.destroy and (self.config.get('names', None) or
                                        self.config.get('map', None)):
-            if self.config.get('map', None):
-                log.info('Applying map from {0!r}.'.format(self.config['map']))
+            map_file = self.config.get('map', None)
+            names = self.config.get('names', ())
+            if map_file is not None:
+                if names != ():
+                    msg = 'Supplying a mapfile, \'{0}\', in addition to instance names {1} ' \
+                          'with the \'--destroy\' or \'-d\' function is not supported. ' \
+                          'Please choose to delete either the entire map file or individual ' \
+                          'instances.'.format(map_file, names)
+                    self.handle_exception(msg, SaltCloudSystemExit)
+
+                log.info('Applying map from \'{0}\'.'.format(map_file))
                 matching = mapper.delete_map(query='list_nodes')
             else:
                 matching = mapper.get_running_by_names(
-                    self.config.get('names', ()),
+                    names,
                     profile=self.options.profile
                 )
 
             if not matching:
                 print('No machines were found to be destroyed')
-                self.exit(os.EX_OK)
+                self.exit(salt.defaults.exitcodes.EX_OK)
 
             msg = 'The following virtual machines are set to be destroyed:\n'
             names = set()
-            for alias, drivers in matching.iteritems():
+            for alias, drivers in six.iteritems(matching):
                 msg += '  {0}:\n'.format(alias)
-                for driver, vms in drivers.iteritems():
+                for driver, vms in six.iteritems(drivers):
                     msg += '    {0}:\n'.format(driver)
                     for name in vms:
                         msg += '      {0}\n'.format(name)
@@ -171,8 +215,14 @@ class SaltCloud(parsers.SaltCloudParser):
         elif self.options.action and (self.config.get('names', None) or
                                       self.config.get('map', None)):
             if self.config.get('map', None):
-                log.info('Applying map from {0!r}.'.format(self.config['map']))
-                names = mapper.get_vmnames_by_action(self.options.action)
+                log.info(
+                    'Applying map from \'{0}\'.'.format(self.config['map'])
+                )
+                try:
+                    names = mapper.get_vmnames_by_action(self.options.action)
+                except SaltCloudException as exc:
+                    msg = 'There was an error actioning virtual machines.'
+                    self.handle_exception(msg, exc)
             else:
                 names = self.config.get('names', None)
 
@@ -187,8 +237,8 @@ class SaltCloud(parsers.SaltCloudParser):
             for name in names:
                 if '=' in name:
                     # This is obviously not a machine name, treat it as a kwarg
-                    comps = name.split('=')
-                    kwargs[comps[0]] = comps[1]
+                    key, value = name.split('=', 1)
+                    kwargs[key] = value
                 else:
                     msg += '  {0}\n'.format(name)
                     machines.append(name)
@@ -206,7 +256,7 @@ class SaltCloud(parsers.SaltCloudParser):
             args = self.args[:]
             for arg in args[:]:
                 if '=' in arg:
-                    key, value = arg.split('=')
+                    key, value = arg.split('=', 1)
                     kwargs[key] = value
                     args.remove(arg)
 
@@ -244,19 +294,21 @@ class SaltCloud(parsers.SaltCloudParser):
                 self.selected_query_option is None:
             if len(mapper.rendered_map) == 0:
                 sys.stderr.write('No nodes defined in this map')
-                self.exit(salt.exitcodes.EX_GENERIC)
+                self.exit(salt.defaults.exitcodes.EX_GENERIC)
             try:
                 ret = {}
                 run_map = True
 
-                log.info('Applying map from {0!r}.'.format(self.config['map']))
+                log.info(
+                    'Applying map from \'{0}\'.'.format(self.config['map'])
+                )
                 dmap = mapper.map_data()
 
                 msg = ''
                 if 'errors' in dmap:
                     # display profile errors
                     msg += 'Found the following errors:\n'
-                    for profile_name, error in dmap['errors'].iteritems():
+                    for profile_name, error in six.iteritems(dmap['errors']):
                         msg += '  {0}: {1}\n'.format(profile_name, error)
                     sys.stderr.write(msg)
                     sys.stderr.flush()
@@ -296,7 +348,7 @@ class SaltCloud(parsers.SaltCloudParser):
                         log.info('Complete')
 
                 if dmap.get('existing', None):
-                    for name in dmap['existing'].keys():
+                    for name in dmap['existing']:
                         ret[name] = {'Message': 'Already running'}
 
             except (SaltCloudException, Exception) as exc:
@@ -311,13 +363,13 @@ class SaltCloud(parsers.SaltCloudParser):
         )
         # display output using salt's outputter system
         print(display_output(ret))
-        self.exit(os.EX_OK)
+        self.exit(salt.defaults.exitcodes.EX_OK)
 
     def print_confirm(self, msg):
         if self.options.assume_yes:
             return True
         print(msg)
-        res = raw_input('Proceed? [N/y] ')
+        res = input('Proceed? [N/y] ')
         if not res.lower().startswith('y'):
             return False
         print('... proceeding')
@@ -334,13 +386,13 @@ class SaltCloud(parsers.SaltCloudParser):
                 self.exit(
                     exc.exit_code,
                     '{0}\n'.format(
-                        msg.format(exc.message.rstrip())
+                        msg.format(str(exc).rstrip())
                     )
                 )
             # It's not a system exit but it's an error we can
             # handle
             self.error(
-                msg.format(exc.message)
+                msg.format(str(exc))
             )
         # This is a generic exception, log it, include traceback if
         # debug logging is enabled and exit.
@@ -348,6 +400,6 @@ class SaltCloud(parsers.SaltCloudParser):
             msg.format(exc),
             # Show the traceback if the debug logging level is
             # enabled
-            exc_info=log.isEnabledFor(logging.DEBUG)
+            exc_info_on_loglevel=logging.DEBUG
         )
-        self.exit(salt.exitcodes.EX_GENERIC)
+        self.exit(salt.defaults.exitcodes.EX_GENERIC)

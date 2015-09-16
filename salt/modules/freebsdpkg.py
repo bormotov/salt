@@ -9,7 +9,7 @@ Remote package support using ``pkg_add(1)``
     pkgng local database and, if found,  would provide some of pkgng's
     functionality. The rewrite of this module has removed all pkgng support,
     and moved it to the :mod:`pkgng <salt.modules.pkgng>` execution module. For
-    verisions <= 0.17.0, the documentation here should not be considered
+    versions <= 0.17.0, the documentation here should not be considered
     accurate. If your Minion is running one of these versions, then the
     documentation for this module can be viewed using the :mod:`sys.doc
     <salt.modules.sys.doc>` function:
@@ -66,6 +66,7 @@ variables, if set, but these values can also be overridden in several ways:
               pkg.installed:
                 - fromrepo: ftp://ftp2.freebsd.org/
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import copy
@@ -75,6 +76,7 @@ import re
 # Import salt libs
 import salt.utils
 from salt.exceptions import CommandExecutionError, MinionError
+import salt.ext.six as six
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +86,18 @@ __virtualname__ = 'pkg'
 
 def __virtual__():
     '''
-    Load as 'pkg' on FreeBSD versions less than 10
+    Load as 'pkg' on FreeBSD versions less than 10.
+    Don't load on FreeBSD 9 when the config option
+    ``providers:pkg`` is set to 'pkgng'.
     '''
     if __grains__['os'] == 'FreeBSD' and float(__grains__['osrelease']) < 10:
+        providers = {}
+        if 'providers' in __opts__:
+            providers = __opts__['providers']
+        if providers and 'pkg' in providers and providers['pkg'] == 'pkgng':
+            log.debug('Configuration option \'providers:pkg\' is set to '
+                    '\'pkgng\', won\'t load old provider \'freebsdpkg\'.')
+            return False
         return __virtualname__
     return False
 
@@ -212,7 +223,7 @@ def version(*names, **kwargs):
     origins = __context__.get('pkg.origin', {})
     return dict([
         (x, {'origin': origins.get(x, ''), 'version': y})
-        for x, y in ret.iteritems()
+        for x, y in six.iteritems(ret)
     ])
 
 
@@ -262,7 +273,7 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
             origins = __context__.get('pkg.origin', {})
             return dict([
                 (x, {'origin': origins.get(x, ''), 'version': y})
-                for x, y in ret.iteritems()
+                for x, y in six.iteritems(ret)
             ])
         return ret
 
@@ -288,7 +299,7 @@ def list_pkgs(versions_as_list=False, with_origin=False, **kwargs):
     if salt.utils.is_true(with_origin):
         return dict([
             (x, {'origin': origins.get(x, ''), 'version': y})
-            for x, y in ret.iteritems()
+            for x, y in six.iteritems(ret)
         ])
     return ret
 
@@ -454,7 +465,7 @@ def _rehash():
     Recomputes internal hash table for the PATH variable. Use whenever a new
     command is created during the current session.
     '''
-    shell = __salt__['cmd.run']('echo $SHELL', output_loglevel='trace')
+    shell = __salt__['environ.get']('SHELL', output_loglevel='trace')
     if shell.split('/')[-1] in ('csh', 'tcsh'):
         __salt__['cmd.run']('rehash', output_loglevel='trace')
 
@@ -475,7 +486,7 @@ def file_list(*packages):
     '''
     ret = file_dict(*packages)
     files = []
-    for pkg_files in ret['files'].values():
+    for pkg_files in six.itervalues(ret['files']):
         files.extend(pkg_files)
     ret['files'] = files
     return ret

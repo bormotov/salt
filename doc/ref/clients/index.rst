@@ -14,17 +14,16 @@ client is detailed below.
 
     Salt can be used from CLI scripts as well as via a REST interface.
 
-    See Salt's :ref:`outputter system <all-salt.output>` to retrive structured
+    See Salt's :ref:`outputter system <all-salt.output>` to retrieve structured
     data from Salt as JSON, or as shell-friendly text, or many other formats.
 
     See the :py:func:`state.event <salt.runners.state.event>` runner to utilize
     Salt's event bus from shell scripts.
 
-    See the `salt-api`_ project to access Salt externally via a REST interface.
-    It uses Salt's Python interface documented below and is also useful as a
-    reference implementation.
+    Salt's `netapi module`_ provides access to Salt externally via a REST interface.
+    Review the `netapi module`_ documentation for more information.
 
-.. _`salt-api`: https://github.com/saltstack/salt-api
+.. _`netapi module`: http://docs.saltstack.com/en/latest/topics/netapi/index.html
 
 Salt's ``opts`` dictionary
 ==========================
@@ -68,6 +67,8 @@ Each module type has a corresponding loader function.
 
 .. autofunction:: salt.loader.grains
 
+.. autofunction:: salt.loader.grain_funcs
+
 Salt's Client Interfaces
 ========================
 
@@ -82,22 +83,28 @@ Salt Caller
 -----------
 
 .. autoclass:: salt.client.Caller
-    :members: function
+    :members: cmd
 
 RunnerClient
 ------------
 
 .. autoclass:: salt.runner.RunnerClient
-    :members:
+    :members: cmd, async, cmd_sync, cmd_async
 
 WheelClient
 -----------
 
 .. autoclass:: salt.wheel.WheelClient
-    :members:
+    :members: cmd, async, cmd_sync, cmd_async
 
 CloudClient
 -----------
 
 .. autoclass:: salt.cloud.CloudClient
     :members:
+
+SSHClient
+---------
+
+.. autoclass:: salt.client.ssh.client.SSHClient
+    :members: cmd, cmd_iter

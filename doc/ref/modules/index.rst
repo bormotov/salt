@@ -21,20 +21,18 @@ Modules Are Easy to Write!
 
 Writing Salt execution modules is straightforward.
 
-A Salt execution modules is a Python or `Cython`_ module
+A Salt execution module is a Python or `Cython`_ module
 placed in a directory called ``_modules/``
 within the :conf_master:`file_roots` as specified by the master config file. By
-default this is `/srv/salt/_modules` on Linux systems.
+default this is ``/srv/salt/_modules`` on Linux systems.
 
 
 Modules placed in ``_modules/`` will be synced to the minions when any of the following
 Salt functions are called:
 
-    :mod:`state.highstate <salt.modules.state.highstate>`
-
-    :mod:`saltutil.sync_modules <salt.modules.saltutil.sync_modules>`
-
-    :mod:`saltutil.sync_all <salt.modules.saltutil.sync_all>`
+* :mod:`state.highstate <salt.modules.state.highstate>`
+* :mod:`saltutil.sync_modules <salt.modules.saltutil.sync_modules>`
+* :mod:`saltutil.sync_all <salt.modules.saltutil.sync_all>`
 
 Note that a module's default name is its filename
 (i.e. ``foo.py`` becomes module ``foo``), but that its name can be overridden
@@ -49,6 +47,86 @@ compilation of the Cython module is automatic and happens when the minion
 starts, so only the ``*.pyx`` file is required.
 
 .. _`Cython`: http://cython.org/
+
+Zip Archives as Modules
+=======================
+Python 2.3 and higher allows developers to directly import zip archives containing Python code.
+By setting :conf_minion:`enable_zip_modules` to ``True`` in the minion config, the Salt loader
+will be able to import ``.zip`` files in this fashion.  This allows Salt module developers to
+package dependencies with their modules for ease of deployment, isolation, etc.
+
+For a user, Zip Archive modules behave just like other modules.  When executing a function from a
+module provided as the file ``my_module.zip``, a user would call a function within that module
+as ``my_module.<function>``.
+
+Creating a Zip Archive Module
+-----------------------------
+A Zip Archive module is structured similarly to a simple `Python package`_.  The ``.zip`` file contains
+a single directory with the same name as the module.  The module code traditionally in ``<module_name>.py``
+goes in ``<module_name>/__init__.py``.  The dependency packages are subdirectories of ``<module_name>/``.
+
+Here is an example directory structure for the ``lumberjack`` module, which has two library dependencies
+(``sleep`` and ``work``) to be included.
+
+.. code-block:: bash
+
+    modules $ ls -R lumberjack
+    __init__.py     sleep           work
+
+    lumberjack/sleep:
+    __init__.py
+
+    lumberjack/work:
+    __init__.py
+
+The contents of ``lumberjack/__init__.py`` show how to import and use these included libraries.
+
+.. code-block:: python
+
+    # Libraries included in lumberjack.zip
+    from lumberjack import sleep, work
+
+
+    def is_ok(person):
+        ''' Checks whether a person is really a lumberjack '''
+        return sleep.all_night(person) and work.all_day(person)
+
+Then, create the zip:
+
+.. code-block:: bash
+
+    modules $ zip -r lumberjack lumberjack
+      adding: lumberjack/ (stored 0%)
+      adding: lumberjack/__init__.py (deflated 39%)
+      adding: lumberjack/sleep/ (stored 0%)
+      adding: lumberjack/sleep/__init__.py (deflated 7%)
+      adding: lumberjack/work/ (stored 0%)
+      adding: lumberjack/work/__init__.py (deflated 7%)
+    modules $ unzip -l lumberjack.zip
+    Archive:  lumberjack.zip
+      Length     Date   Time    Name
+     --------    ----   ----    ----
+            0  08-21-15 20:08   lumberjack/
+          348  08-21-15 20:08   lumberjack/__init__.py
+            0  08-21-15 19:53   lumberjack/sleep/
+           83  08-21-15 19:53   lumberjack/sleep/__init__.py
+            0  08-21-15 19:53   lumberjack/work/
+           81  08-21-15 19:21   lumberjack/work/__init__.py
+     --------                   -------
+          512                   6 files
+
+Once placed in :conf_master:`file_roots`, Salt users can distribute and use ``lumberjack.zip`` like any other module.
+
+.. code-block:: bash
+
+    $ sudo salt minion1 saltutil.sync_modules
+    minion1:
+      - modules.lumberjack
+    $ sudo salt minion1 lumberjack.is_ok 'Michael Palin'
+    minion1:
+      True
+
+.. _`Python package`: https://docs.python.org/2/tutorial/modules.html#packages
 
 Cross-Calling Modules
 =====================
@@ -86,7 +164,7 @@ minion.
 Grains Data
 -----------
 
-The values detected by the Salt Grains on the minion are available in a 
+The values detected by the Salt Grains on the minion are available in a
 :ref:`dict <python2:typesmapping>` named ``__grains__`` and can be accessed
 from within callable objects in the Python modules.
 
@@ -156,15 +234,28 @@ The ``__virtual__`` function is used to return either a
 False is returned then the module is not loaded, if a string is returned then
 the module is loaded with the name of the string.
 
+.. note::
+
+   Optionally, modules may additionally return a list of reasons that a module could
+   not be loaded. For example, if a dependency for 'my_mod' was not met, a
+   __virtual__ function could do as follows:
+
+    return False, ['My Module must be installed before this module can be
+    used.']
+
 This means that the package manager modules can be presented as the ``pkg`` module
 regardless of what the actual module is named.
 
-The package manager modules are the best example of using the ``__virtual__``
+Since ``__virtual__`` is called before the module is loaded, ``__salt__`` will be
+unavailable as it will not have been packed into the module at this point in time.
+
+The package manager modules are among the best example of using the ``__virtual__``
 function. Some examples:
 
 - :blob:`pacman.py <salt/modules/pacman.py>`
 - :blob:`yumpkg.py <salt/modules/yumpkg.py>`
 - :blob:`aptpkg.py <salt/modules/aptpkg.py>`
+- :blob:`at.py <salt/modules/at.py>`
 
 .. note::
     Modules which return a string from ``__virtual__`` that is already used by a module that
@@ -326,4 +417,19 @@ If a "fallback_function" is defined, it will replace the function instead of rem
         '''
         return True
 
+In addition to global dependancies the depends decorator also supports raw booleans.
 
+.. code-block:: python
+
+    from salt.utils.decorators import depends
+
+    HAS_DEP = False
+    try:
+        import dependency_that_sometimes_exists
+        HAS_DEP = True
+    except ImportError:
+        pass
+
+    @depends(HAS_DEP)
+    def foo():
+        return True

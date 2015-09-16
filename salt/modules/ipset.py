@@ -2,9 +2,18 @@
 '''
 Support for ipset
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
+
+# Import 3rd-party libs
+import salt.ext.six as six
+if six.PY3:
+    import ipaddress
+else:
+    import salt.ext.ipaddress as ipaddress
+from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 
 # Import salt libs
 import salt.utils
@@ -121,7 +130,7 @@ def version():
 
 def new_set(set=None, set_type=None, family='ipv4', comment=False, **kwargs):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Create new custom set
 
@@ -165,7 +174,7 @@ def new_set(set=None, set_type=None, family='ipv4', comment=False, **kwargs):
     if comment:
         cmd = '{0} comment'.format(cmd)
 
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if not out:
         out = True
@@ -174,7 +183,7 @@ def new_set(set=None, set_type=None, family='ipv4', comment=False, **kwargs):
 
 def delete_set(set=None, family='ipv4'):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Delete ipset set.
 
@@ -192,7 +201,7 @@ def delete_set(set=None, family='ipv4'):
         return 'Error: Set needs to be specified'
 
     cmd = '{0} destroy {1}'.format(_ipset_cmd(), set)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if not out:
         out = True
@@ -201,7 +210,7 @@ def delete_set(set=None, family='ipv4'):
 
 def rename_set(set=None, new_set=None, family='ipv4'):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Delete ipset set.
 
@@ -230,7 +239,7 @@ def rename_set(set=None, new_set=None, family='ipv4'):
         return 'Error: New Set already exists'
 
     cmd = '{0} rename {1} {2}'.format(_ipset_cmd(), set, new_set)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if not out:
         out = True
@@ -239,7 +248,7 @@ def rename_set(set=None, new_set=None, family='ipv4'):
 
 def list_sets(family='ipv4'):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     List all ipset sets.
 
@@ -250,8 +259,8 @@ def list_sets(family='ipv4'):
         salt '*' ipset.list_sets
 
     '''
-    cmd = '{0} list -t'.format(_ipset_cmd(), set)
-    out = __salt__['cmd.run'](cmd)
+    cmd = '{0} list -t'.format(_ipset_cmd())
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     _tmp = out.split('\n')
 
@@ -270,7 +279,7 @@ def list_sets(family='ipv4'):
 
 def check_set(set=None, family='ipv4'):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Check that given ipset set exists.
 
@@ -339,7 +348,7 @@ def add(set=None, entry=None, family='ipv4', **kwargs):
 
     # Using -exist to ensure entries are updated if the comment changes
     cmd = '{0} add -exist {1} {2}'.format(_ipset_cmd(), set, cmd)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if len(out) == 0:
         return 'Success'
@@ -368,7 +377,7 @@ def delete(set=None, entry=None, family='ipv4', **kwargs):
         return 'Error: Set {0} does not exist'.format(set)
 
     cmd = '{0} del {1} {2}'.format(_ipset_cmd(), set, entry)
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if len(out) == 0:
         return 'Success'
@@ -378,6 +387,22 @@ def delete(set=None, entry=None, family='ipv4', **kwargs):
 def check(set=None, entry=None, family='ipv4'):
     '''
     Check that an entry exists in the specified set.
+
+    set
+        The ipset name
+
+    entry
+        An entry in the ipset.  This parameter can be a single IP address, a
+        range of IP addresses, or a subnet block.  Example:
+
+        .. code-block::
+
+            192.168.0.1
+            192.168.0.2-192.168.0.19
+            192.168.0.0/25
+
+    family
+        IP protocol version: ipv4 or ipv6
 
     CLI Example:
 
@@ -395,10 +420,47 @@ def check(set=None, entry=None, family='ipv4'):
     if not settype:
         return 'Error: Set {0} does not exist'.format(set)
 
+    if isinstance(entry, list):
+        entries = entry
+    else:
+        if entry.find('-') != -1 and entry.count('-') == 1:
+            start, end = entry.split('-')
+
+            if settype == 'hash:ip':
+                entries = [str(ipaddress.ip_address(ip)) for ip in range(
+                    ipaddress.ip_address(start),
+                    ipaddress.ip_address(end) + 1
+                )]
+
+            elif settype == 'hash:net':
+                networks = ipaddress.summarize_address_range(ipaddress.ip_address(start),
+                                                             ipaddress.ip_address(end))
+                entries = []
+                for network in networks:
+                    entries.append(network.with_prefixlen)
+            else:
+                entries = [entry]
+
+        elif entry.find('/') != -1 and entry.count('/') == 1:
+            if settype == 'hash:ip':
+                entries = [str(ip) for ip in ipaddress.ip_network(entry)]
+            elif settype == 'hash:net':
+                _entries = [str(ip) for ip in ipaddress.ip_network(entry)]
+                if len(_entries) == 1:
+                    entries = [_entries[0]]
+                else:
+                    entries = [entry]
+            else:
+                entries = [entry]
+        else:
+            entries = [entry]
+
     current_members = _find_set_members(set)
-    if entry in current_members:
-        return True
-    return False
+    for entry in entries:
+        if entry not in current_members:
+            return False
+
+    return True
 
 
 def test(set=None, entry=None, family='ipv4', **kwargs):
@@ -424,7 +486,7 @@ def test(set=None, entry=None, family='ipv4', **kwargs):
         return 'Error: Set {0} does not exist'.format(set)
 
     cmd = '{0} test {1} {2}'.format(_ipset_cmd(), set, entry)
-    out = __salt__['cmd.run_all'](cmd)
+    out = __salt__['cmd.run_all'](cmd, python_shell=False)
 
     if out['retcode'] > 0:
         # Entry doesn't exist in set return false
@@ -463,7 +525,7 @@ def flush(set=None, family='ipv4'):
     else:
         #cmd = '{0} flush family {1}'.format(_ipset_cmd(), ipset_family)
         cmd = '{0} flush'.format(_ipset_cmd())
-    out = __salt__['cmd.run'](cmd)
+    out = __salt__['cmd.run'](cmd, python_shell=False)
 
     if len(out) == 0:
         return True
@@ -477,7 +539,7 @@ def _find_set_members(set):
     '''
 
     cmd = '{0} list {1}'.format(_ipset_cmd(), set)
-    out = __salt__['cmd.run_all'](cmd)
+    out = __salt__['cmd.run_all'](cmd, python_shell=False)
 
     if out['retcode'] > 0:
         # Set doesn't exist return false
@@ -500,7 +562,7 @@ def _find_set_info(set):
     '''
 
     cmd = '{0} list -t {1}'.format(_ipset_cmd(), set)
-    out = __salt__['cmd.run_all'](cmd)
+    out = __salt__['cmd.run_all'](cmd, python_shell=False)
 
     if out['retcode'] > 0:
         # Set doesn't exist return false

@@ -14,14 +14,15 @@ configuration file:
       etcd.port: 4001
 
 It is technically possible to configure etcd without using a profile, but this
-is not consided to be a best practice, especially when multiple etcd servers or
-clusters are available.
+is not considered to be a best practice, especially when multiple etcd servers
+or clusters are available.
 
 .. code-block:: yaml
 
     etcd.host: 127.0.0.1
     etcd.port: 4001
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -57,7 +58,7 @@ def __virtual__():
 
 def get_(key, recurse=False, profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Get a value from etcd, by direct path
 
@@ -69,7 +70,7 @@ def get_(key, recurse=False, profile=None):
         salt myminion etcd.get /path/to/key profile=my_etcd_config
         salt myminion etcd.get /path/to/key recurse=True profile=my_etcd_config
     '''
-    client = salt.utils.etcd_util.get_conn(__opts__, profile)
+    client = __utils__['etcd_util.get_conn'](__opts__, profile)
     try:
         result = client.get(key)
     except KeyError as err:
@@ -86,7 +87,7 @@ def get_(key, recurse=False, profile=None):
 
 def set_(key, value, profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Set a value in etcd, by direct path
 
@@ -97,7 +98,8 @@ def set_(key, value, profile=None):
         salt myminion etcd.set /path/to/key value
         salt myminion etcd.set /path/to/key value profile=my_etcd_config
     '''
-    client = salt.utils.etcd_util.get_conn(__opts__, profile)
+
+    client = __utils__['etcd_util.get_conn'](__opts__, profile)
     try:
         result = client.write(key, value)
     except KeyError as err:
@@ -111,7 +113,7 @@ def set_(key, value, profile=None):
 
 def ls_(path='/', profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Return all keys and dirs inside a specific path
 
@@ -123,7 +125,7 @@ def ls_(path='/', profile=None):
         salt myminion etcd.ls /path/to/dir/
         salt myminion etcd.ls /path/to/dir/ profile=my_etcd_config
     '''
-    client = salt.utils.etcd_util.get_conn(__opts__, profile)
+    client = __utils__['etcd_util.get_conn'](__opts__, profile)
     try:
         items = client.get(path)
     except KeyError as err:
@@ -144,7 +146,7 @@ def ls_(path='/', profile=None):
 
 def rm_(key, recurse=False, profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Delete a key from etcd
 
@@ -157,7 +159,7 @@ def rm_(key, recurse=False, profile=None):
         salt myminion etcd.rm /path/to/key profile=my_etcd_config
         salt myminion etcd.rm /path/to/dir recurse=True profile=my_etcd_config
     '''
-    client = salt.utils.etcd_util.get_conn(__opts__, profile)
+    client = __utils__['etcd_util.get_conn'](__opts__, profile)
     try:
         if client.delete(key, recursive=recurse):
             return True
@@ -172,7 +174,7 @@ def rm_(key, recurse=False, profile=None):
 
 def tree(path='/', profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Recurse through etcd and return all values
 
@@ -185,7 +187,7 @@ def tree(path='/', profile=None):
         salt myminion etcd.tree profile=my_etcd_config
         salt myminion etcd.tree /path/to/keys profile=my_etcd_config
     '''
-    client = salt.utils.etcd_util.get_conn(__opts__, profile)
+    client = __utils__['etcd_util.get_conn'](__opts__, profile)
     try:
         return salt.utils.etcd_util.tree(client, path)
     except KeyError as err:
