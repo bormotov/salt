@@ -17,14 +17,13 @@ illustrate:
 .. code-block:: yaml
 
     /etc/salt/master: # maps to "name"
-      file: # maps to State module filename e.g. https://github.com/saltstack/salt/tree/develop/salt/states/file.py
-        - managed # maps to the managed function in the file State module
+      file.managed: # maps to <filename>.<function> - e.g. "managed" in https://github.com/saltstack/salt/tree/develop/salt/states/file.py
         - user: root # one of many options passed to the manage function
         - group: root
         - mode: 644
         - source: salt://salt/master
 
-Therefore this SLS data can be directly linked to a module, function and
+Therefore this SLS data can be directly linked to a module, function, and
 arguments passed to that function.
 
 This does issue the burden, that function names, state names and function
@@ -94,15 +93,36 @@ A State Module must return a dict containing the following keys/values:
   containing the old/new values. For example, the pkg state's **changes** dict
   has one key for each package changed, with the "old" and "new" keys in its
   sub-dict containing the old and new versions of the package.
-- **result:** A boolean value. *True* if the action was successful, otherwise
-  *False*.
+- **result:** A tristate value.  ``True`` if the action was successful,
+  ``False`` if it was not, or ``None`` if the state was run in test mode,
+  ``test=True``, and changes would have been made if the state was not run in
+  test mode.
+
+  +--------------------+-----------+-----------+
+  |                    | live mode | test mode |
+  +====================+===========+===========+
+  | no changes         | ``True``  | ``True``  |
+  +--------------------+-----------+-----------+
+  | successful changes | ``True``  | ``None``  |
+  +--------------------+-----------+-----------+
+  | failed changes     | ``False`` | ``None``  |
+  +--------------------+-----------+-----------+
+
+  .. note::
+
+      Test mode does not predict if the changes will be successful or not.
+
 - **comment:** A string containing a summary of the result.
+
+The return data can also, include the **pchanges** key, this statnds for
+`predictive changes`. The **pchanges** key informs the State system what
+changes are predicted to occur.
 
 Test State
 ==========
 
-All states should check for and support ``test`` being passed in the options. 
-This will return data about what changes would occur if the state were actually 
+All states should check for and support ``test`` being passed in the options.
+This will return data about what changes would occur if the state were actually
 run. An example of such a check could look like this:
 
 .. code-block:: python
@@ -190,19 +210,19 @@ The following is a simplistic example of a full state module and function.
 Remember to call out to execution modules to perform all the real work. The
 state module should only perform "before" and "after" checks.
 
-1.  Make a custom state module by putting the code in the following file::
+1.  Make a custom state module by putting the code into a file at the following
+    path: **/srv/salt/_states/my_custom_state.py**.
 
-        /srv/salt/_states/my_custom_state.py
+2.  Distribute the custom state module to the minions:
 
-2.  Distribute the custom state module to the minions::
+    .. code-block:: bash
 
         salt '*' saltutil.sync_states
 
-3.  Write a new state to use the custom state by making a new state file::
+3.  Write a new state to use the custom state by making a new state file, for
+    instance **/srv/salt/my_custom_state.sls**.
 
-        /srv/salt/my_custom_state.sls
-
-4.  Call your custom state with the following syntax:
+4.  Add the following SLS configuration to the file created in Step 3:
 
     .. code-block:: yaml
 
@@ -220,7 +240,7 @@ Example state module
 
     import salt.exceptions
 
-    def enforce_custom_thing(name, foo, baz=True):
+    def enforce_custom_thing(name, foo, bar=True):
         '''
         Enforce the state of a custom thing
 
@@ -235,13 +255,19 @@ Example state module
         bar : True
             An argument with a default value
         '''
-        ret = {'name': name, 'changes': {}, 'result': False, 'comment': ''}
+        ret = {
+            'name': name,
+            'changes': {},
+            'result': False,
+            'comment': '',
+            'pchanges': {},
+            }
 
         # Start with basic error-checking. Do all the passed parameters make sense
         # and agree with each-other?
-        if baz == True and foo.startswith('Foo'):
+        if bar == True and foo.startswith('Foo'):
             raise salt.exceptions.SaltInvocationError(
-                'Argument "foo" cannot start with "Foo" if argument "baz" is True.')
+                'Argument "foo" cannot start with "Foo" if argument "bar" is True.')
 
         # Check the current state of the system. Does anything need to change?
         current_state = __salt__['my_custom_module.current_state'](name)
@@ -255,7 +281,7 @@ Example state module
         # in ``test=true`` mode.
         if __opts__['test'] == True:
             ret['comment'] = 'The state of "{0}" will be changed.'.format(name)
-            ret['changes'] = {
+            ret['pchanges'] = {
                 'old': current_state,
                 'new': 'Description, diff, whatever of the new state',
             }

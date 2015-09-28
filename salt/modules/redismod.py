@@ -2,6 +2,8 @@
 '''
 Module to provide redis functionality to Salt
 
+.. versionadded:: 2014.7.0
+
 :configuration: This module requires the redis python module and uses the
     following defaults which may be overridden in the minion configuration:
 
@@ -12,6 +14,9 @@ Module to provide redis functionality to Salt
     redis.db: 0
     redis.password: None
 '''
+
+# Import Pytho libs
+from __future__ import absolute_import
 
 # Import third party libs
 try:

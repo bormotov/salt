@@ -3,30 +3,38 @@
 The generic libcloud template used to create the connections and deploy the
 cloud virtual machines
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 import logging
+from salt.ext.six import string_types
+import salt.ext.six as six
+from salt.ext.six.moves import zip
 
 
 # pylint: disable=W0611
 # Import libcloud
 try:
+    import libcloud
     from libcloud.compute.types import Provider
     from libcloud.compute.providers import get_driver
     from libcloud.compute.deployment import (
         MultiStepDeployment,
-        ScriptDeployment,
-        SSHKeyDeployment
+        ScriptDeployment
     )
     HAS_LIBCLOUD = True
+    LIBCLOUD_VERSION_INFO = tuple([
+        int(part) for part in libcloud.__version__.replace('-', '.').split('.')[:3]
+    ])
+
 except ImportError:
     HAS_LIBCLOUD = False
+    LIBCLOUD_VERSION_INFO = (1000,)
 # pylint: enable=W0611
 
 
 # Import salt libs
-import salt._compat
 import salt.utils.event
 import salt.client
 
@@ -34,7 +42,7 @@ import salt.client
 import salt.utils
 import salt.utils.cloud
 import salt.config as config
-from salt.cloud.exceptions import SaltCloudNotFound, SaltCloudSystemExit
+from salt.exceptions import SaltCloudNotFound, SaltCloudSystemExit
 
 # Get logging started
 log = logging.getLogger(__name__)
@@ -44,11 +52,18 @@ LIBCLOUD_MINIMAL_VERSION = (0, 14, 0)
 
 
 def node_state(id_):
+    '''
+    Libcloud supported node states
+    '''
     states = {0: 'RUNNING',
               1: 'REBOOTING',
               2: 'TERMINATED',
               3: 'PENDING',
-              4: 'UNKNOWN'}
+              4: 'UNKNOWN',
+              5: 'STOPPED',
+              6: 'SUSPENDED',
+              7: 'ERROR',
+              8: 'PAUSED'}
     return states[id_]
 
 
@@ -61,10 +76,10 @@ def check_libcloud_version(reqver=LIBCLOUD_MINIMAL_VERSION, why=None):
 
     if not isinstance(reqver, (list, tuple)):
         raise RuntimeError(
-            '\'reqver\' needs to passed as a tuple or list, ie, (0, 14, 0)'
+            '\'reqver\' needs to passed as a tuple or list, i.e., (0, 14, 0)'
         )
     try:
-        import libcloud
+        import libcloud  # pylint: disable=redefined-outer-name
     except ImportError:
         raise ImportError(
             'salt-cloud requires >= libcloud {0} which is not installed'.format(
@@ -72,14 +87,7 @@ def check_libcloud_version(reqver=LIBCLOUD_MINIMAL_VERSION, why=None):
             )
         )
 
-    ver = libcloud.__version__
-    ver = ver.replace('-', '.')
-    comps = ver.split('.')
-    version = []
-    for number in comps[:3]:
-        version.append(int(number))
-
-    if tuple(version) >= reqver:
+    if LIBCLOUD_VERSION_INFO >= reqver:
         return libcloud.__version__
 
     errormsg = 'Your version of libcloud is {0}. '.format(libcloud.__version__)
@@ -92,18 +100,6 @@ def check_libcloud_version(reqver=LIBCLOUD_MINIMAL_VERSION, why=None):
     raise ImportError(errormsg)
 
 
-def libcloud_version():
-    '''
-    Require the minimal libcloud version
-    '''
-    salt.utils.warn_until(
-        'Helium',
-        'Please stop using \'salt.cloud.libcloudfuns.libcloud_version()\'. '
-        'Instead use \'salt.cloud.libcloudfuns.check_libcloud_version()\'.'
-    )
-    return check_libcloud_version()
-
-
 def get_node(conn, name):
     '''
     Return a libcloud node for the named VM
@@ -113,21 +109,6 @@ def get_node(conn, name):
         if node.name == name:
             salt.utils.cloud.cache_node(salt.utils.cloud.simple_types_filter(node.__dict__), __active_provider_name__, __opts__)
             return node
-
-
-def ssh_pub(vm_):
-    '''
-    Deploy the primary ssh authentication key
-    '''
-    ssh = config.get_cloud_config_value('ssh_auth', vm_, __opts__)
-    if not ssh:
-        return None
-
-    ssh = os.path.expanduser(ssh)
-    if os.path.isfile(ssh):
-        return None
-
-    return SSHKeyDeployment(open(ssh).read())
 
 
 def avail_locations(conn=None, call=None):
@@ -147,7 +128,7 @@ def avail_locations(conn=None, call=None):
     locations = conn.list_locations()
     ret = {}
     for img in locations:
-        if isinstance(img.name, salt._compat.string_types):
+        if isinstance(img.name, string_types):
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -158,7 +139,7 @@ def avail_locations(conn=None, call=None):
                 continue
 
             attr_value = getattr(img, attr)
-            if isinstance(attr_value, salt._compat.string_types):
+            if isinstance(attr_value, string_types):
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -184,7 +165,7 @@ def avail_images(conn=None, call=None):
     images = conn.list_images()
     ret = {}
     for img in images:
-        if isinstance(img.name, salt._compat.string_types):
+        if isinstance(img.name, string_types):
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -194,7 +175,7 @@ def avail_images(conn=None, call=None):
             if attr.startswith('_'):
                 continue
             attr_value = getattr(img, attr)
-            if isinstance(attr_value, salt._compat.string_types):
+            if isinstance(attr_value, string_types):
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -219,7 +200,7 @@ def avail_sizes(conn=None, call=None):
     sizes = conn.list_sizes()
     ret = {}
     for size in sizes:
-        if isinstance(size.name, salt._compat.string_types):
+        if isinstance(size.name, string_types):
             size_name = size.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             size_name = str(size.name)
@@ -234,7 +215,7 @@ def avail_sizes(conn=None, call=None):
             except Exception:
                 pass
 
-            if isinstance(attr_value, salt._compat.string_types):
+            if isinstance(attr_value, string_types):
                 attr_value = attr_value.encode(
                     'ascii', 'salt-cloud-force-ascii'
                 )
@@ -252,12 +233,12 @@ def get_location(conn, vm_):
     )
 
     for img in locations:
-        if isinstance(img.id, salt._compat.string_types):
+        if isinstance(img.id, string_types):
             img_id = img.id.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_id = str(img.id)
 
-        if isinstance(img.name, salt._compat.string_types):
+        if isinstance(img.name, string_types):
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -283,12 +264,12 @@ def get_image(conn, vm_):
     )
 
     for img in images:
-        if isinstance(img.id, salt._compat.string_types):
+        if isinstance(img.id, string_types):
             img_id = img.id.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_id = str(img.id)
 
-        if isinstance(img.name, salt._compat.string_types):
+        if isinstance(img.name, string_types):
             img_name = img.name.encode('ascii', 'salt-cloud-force-ascii')
         else:
             img_name = str(img.name)
@@ -368,7 +349,13 @@ def destroy(name, conn=None, call=None):
             flush_mine_on_destroy = profiles[profile]['flush_mine_on_destroy']
     if flush_mine_on_destroy:
         log.info('Clearing Salt Mine: {0}'.format(name))
-        client = salt.client.get_local_client(__opts__['conf_file'])
+
+        mopts_ = salt.config.DEFAULT_MINION_OPTS
+        conf_path = '/'.join(__opts__['conf_file'].split('/')[:-1])
+        mopts_.update(
+            salt.config.minion_config(os.path.join(conf_path, 'minion'))
+        )
+        client = salt.client.get_local_client(mopts_)
         minions = client.cmd(name, 'mine.flush')
 
     log.info('Clearing Salt Mine: {0}, {1}'.format(name, flush_mine_on_destroy))
@@ -465,7 +452,7 @@ def list_nodes_full(conn=None, call=None):
     ret = {}
     for node in nodes:
         pairs = {}
-        for key, value in zip(node.__dict__.keys(), node.__dict__.values()):
+        for key, value in zip(node.__dict__, six.itervalues(node.__dict__)):
             pairs[key] = value
         ret[node.name] = pairs
         del ret[node.name]['driver']

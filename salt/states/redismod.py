@@ -3,6 +3,8 @@
 Management of Redis server
 ==========================
 
+.. versionadded:: 2014.7.0
+
 :depends:   - redis Python module
 :configuration: See :py:mod:`salt.modules.redis` for setup instructions.
 
@@ -13,7 +15,7 @@ Management of Redis server
         - value: string data
 
 The redis server information specified in the minion config file can be
-overidden in states using the following arguments: ``host``, ``post``, ``db``,
+overridden in states using the following arguments: ``host``, ``post``, ``db``,
 ``password``.
 
 .. code-block:: yaml

@@ -1,38 +1,60 @@
 # -*- coding: utf-8 -*-
 '''
-Control the state system on the minion
+Control the state system on the minion.
+
+State Caching
+-------------
+
+When a highstate is called, the minion automatically caches a copy of the last
+high data. If you then run a highstate with cache=True it will use that cached
+highdata and won't hit the fileserver except for ``salt://`` links in the
+states themselves.
 '''
 
 # Import python libs
-import os
-import json
+from __future__ import absolute_import
 import copy
-import shutil
-import time
+import json
 import logging
+import os
+import shutil
 import tarfile
-import datetime
 import tempfile
+import time
 
 # Import salt libs
-import salt.utils
-import salt.state
+import salt.config
 import salt.payload
-from salt._compat import string_types
+import salt.state
+import salt.utils
+import salt.utils.jid
+import salt.utils.url
 from salt.exceptions import SaltInvocationError
 
+# Import 3rd-party libs
+import salt.ext.six as six
 
 __proxyenabled__ = ['*']
 
 __outputter__ = {
     'sls': 'highstate',
+    'sls_id': 'highstate',
+    'pkg': 'highstate',
     'top': 'highstate',
     'single': 'highstate',
     'highstate': 'highstate',
     'template': 'highstate',
     'template_str': 'highstate',
+    'apply': 'highstate',
+    'apply_': 'highstate',
+    'request': 'highstate',
+    'check_request': 'highstate',
+    'run_request': 'highstate',
 }
 
+__func_alias__ = {
+    'apply_': 'apply'
+}
 log = logging.getLogger(__name__)
 
 
@@ -40,7 +62,7 @@ def _filter_running(runnings):
     '''
     Filter out the result: True + no changes data
     '''
-    ret = dict((tag, value) for tag, value in runnings.iteritems()
+    ret = dict((tag, value) for tag, value in six.iteritems(runnings)
                if not value['result'] or value['changes'])
     return ret
 
@@ -73,7 +95,7 @@ def _wait(jid):
     Wait for all previously started state jobs to finish running
     '''
     if jid is None:
-        jid = '{0:%Y%m%d%H%M%S%f}'.format(datetime.datetime.now())
+        jid = salt.utils.jid.gen_jid()
     states = _prior_running_states(jid)
     while states:
         time.sleep(1)
@@ -82,9 +104,9 @@ def _wait(jid):
 
 def running(concurrent=False):
     '''
-    Return a dict of state return data if a state function is already running.
-    This function is used to prevent multiple state calls from being run at
-    the same time.
+    Return a list of strings that contain state return data if a state function is
+    already running. This function is used to prevent multiple state calls from being
+    run at the same time.
 
     CLI Example:
 
@@ -103,7 +125,7 @@ def running(concurrent=False):
         ).format(
             data['fun'],
             data['pid'],
-            salt.utils.jid_to_time(data['jid']),
+            salt.utils.jid.jid_to_time(data['jid']),
             data['jid'],
         )
         ret.append(err)
@@ -138,6 +160,16 @@ def _check_queue(queue, kwargs):
             return conflict
 
 
+def _get_opts(localconfig=None):
+    '''
+    Return a copy of the opts for use, optionally load a local config on top
+    '''
+    opts = copy.deepcopy(__opts__)
+    if localconfig:
+        opts = salt.config.minion_config(localconfig, defaults=opts)
+    return opts
+
+
 def low(data, queue=False, **kwargs):
     '''
     Execute a single low data call
@@ -165,7 +197,7 @@ def low(data, queue=False, **kwargs):
     return ret
 
 
-def high(data, queue=False, **kwargs):
+def high(data, test=False, queue=False, **kwargs):
     '''
     Execute the compound calls stored in a single set of high data
     This function is mostly intended for testing the state system
@@ -179,7 +211,21 @@ def high(data, queue=False, **kwargs):
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.State(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
+
+    if salt.utils.test_mode(test=test, **kwargs):
+        opts['test'] = True
+    elif test is not None:
+        opts['test'] = test
+    else:
+        opts['test'] = __opts__.get('test', None)
+
+    pillar = kwargs.get('pillar')
+    if pillar is not None and not isinstance(pillar, dict):
+        raise SaltInvocationError(
+            'Pillar data must be formatted as a dictionary'
+        )
+    st_ = salt.state.State(__opts__, pillar)
     ret = st_.call_high(data)
     _set_retcode(ret)
     return ret
@@ -187,7 +233,10 @@ def high(data, queue=False, **kwargs):
 
 def template(tem, queue=False, **kwargs):
     '''
-    Execute the information stored in a template file on the minion
+    Execute the information stored in a template file on the minion.
+
+    This function does not ask a master for a SLS file to render but
+    instead directly processes the file at the provided path on the minion.
 
     CLI Example:
 
@@ -198,8 +247,14 @@ def template(tem, queue=False, **kwargs):
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.State(__opts__)
-    ret = st_.call_template(tem)
+    st_ = salt.state.HighState(__opts__)
+    if not tem.endswith('.sls'):
+        tem = '{sls}.sls'.format(sls=tem)
+    high_state, errors = st_.render_state(tem, None, '', None, local=True)
+    if errors:
+        __context__['retcode'] = 1
+        return errors
+    ret = st_.state.call_high(high_state)
     _set_retcode(ret)
     return ret
 
@@ -223,11 +278,190 @@ def template_str(tem, queue=False, **kwargs):
     return ret
 
 
-def highstate(test=None, queue=False, **kwargs):
+def apply_(mods=None,
+          **kwargs):
+    '''
+    .. versionadded:: 2015.5.0
+
+    Apply states! This function will call highstate or state.sls based on the
+    arguments passed in, state.apply is intended to be the main gateway for
+    all state executions.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.apply
+        salt '*' state.apply test
+        salt '*' state.apply test,pkgs
+    '''
+    if mods:
+        return sls(mods, **kwargs)
+    return highstate(**kwargs)
+
+
+def request(mods=None,
+            **kwargs):
+    '''
+    .. versionadded:: 2015.5.0
+
+    Request that the local admin execute a state run via
+    `salt-call state.run_request`
+    All arguments match state.apply
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.request
+        salt '*' state.request test
+        salt '*' state.request test,pkgs
+    '''
+    kwargs['test'] = True
+    ret = apply_(mods, **kwargs)
+    notify_path = os.path.join(__opts__['cachedir'], 'req_state.p')
+    serial = salt.payload.Serial(__opts__)
+    req = check_request()
+    req.update({kwargs.get('name', 'default'): {
+            'test_run': ret,
+            'mods': mods,
+            'kwargs': kwargs
+            }
+        })
+    cumask = os.umask(0o77)
+    try:
+        if salt.utils.is_windows():
+            # Make sure cache file isn't read-only
+            __salt__['cmd.run']('attrib -R "{0}"'.format(notify_path))
+        with salt.utils.fopen(notify_path, 'w+b') as fp_:
+            serial.dump(req, fp_)
+    except (IOError, OSError):
+        msg = 'Unable to write state request file {0}. Check permission.'
+        log.error(msg.format(notify_path))
+    os.umask(cumask)
+    return ret
+
+
+def check_request(name=None):
+    '''
+    .. versionadded:: 2015.5.0
+
+    Return the state request information, if any
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.check_request
+    '''
+    notify_path = os.path.join(__opts__['cachedir'], 'req_state.p')
+    serial = salt.payload.Serial(__opts__)
+    if os.path.isfile(notify_path):
+        with salt.utils.fopen(notify_path, 'rb') as fp_:
+            req = serial.load(fp_)
+        if name:
+            return req[name]
+        return req
+    return {}
+
+
+def clear_request(name=None):
+    '''
+    .. versionadded:: 2015.5.0
+
+    Clear out the state execution request without executing it
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.clear_request
+    '''
+    notify_path = os.path.join(__opts__['cachedir'], 'req_state.p')
+    serial = salt.payload.Serial(__opts__)
+    if not os.path.isfile(notify_path):
+        return True
+    if not name:
+        try:
+            os.remove(notify_path)
+        except (IOError, OSError):
+            pass
+    else:
+        req = check_request()
+        if name in req:
+            req.pop(name)
+        else:
+            return False
+        cumask = os.umask(0o77)
+        try:
+            if salt.utils.is_windows():
+                # Make sure cache file isn't read-only
+                __salt__['cmd.run']('attrib -R "{0}"'.format(notify_path))
+            with salt.utils.fopen(notify_path, 'w+b') as fp_:
+                serial.dump(req, fp_)
+        except (IOError, OSError):
+            msg = 'Unable to write state request file {0}. Check permission.'
+            log.error(msg.format(notify_path))
+        os.umask(cumask)
+    return True
+
+
+def run_request(name='default', **kwargs):
+    '''
+    .. versionadded:: 2015.5.0
+
+    Execute the pending state request
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.run_request
+    '''
+    req = check_request()
+    if name not in req:
+        return {}
+    n_req = req[name]
+    if 'mods' not in n_req or 'kwargs' not in n_req:
+        return {}
+    req[name]['kwargs'].update(kwargs)
+    if 'test' in n_req['kwargs']:
+        n_req['kwargs'].pop('test')
+    if req:
+        ret = apply_(n_req['mods'], **n_req['kwargs'])
+        try:
+            os.remove(os.path.join(__opts__['cachedir'], 'req_state.p'))
+        except (IOError, OSError):
+            pass
+        return ret
+    return {}
+
+
+def highstate(test=None,
+              queue=False,
+              **kwargs):
     '''
     Retrieve the state data from the salt master for this minion and execute it
 
-    Custom Pillar data can be passed with the ``pillar`` kwarg.
+    test
+        Notify states to execute in test-only (dry-run) mode.
+
+        Sets the ``test`` variable in the minion ``opts`` for the duration of
+        the state run.
+    pillar
+        Custom Pillar data can be passed with the ``pillar`` kwarg. Values
+        passed here will override hard-coded Pillar values.
+    queue : ``False``
+        Instead of failing immediately when another state run is in progress,
+        queue the new state run to begin running once the other has finished.
+
+        This option starts a new thread for each queued state run so use this
+        option sparingly.
+    localconfig:
+        Instead of using running minion opts, load ``localconfig`` and merge that
+        with the running minion opts. This functionality is intended for using
+        "roots" of salt directories (with their own minion config, pillars,
+        file_roots) to run highstate out of.
 
     CLI Example:
 
@@ -241,11 +475,21 @@ def highstate(test=None, queue=False, **kwargs):
 
         salt '*' state.highstate pillar="{foo: 'Foo!', bar: 'Bar!'}"
     '''
+    if _disabled(['highstate']):
+        log.debug('Salt highstate run is disabled. To re-enable, run state.enable highstate')
+        ret = {
+            'name': 'Salt highstate run is disabled. To re-enable, run state.enable highstate',
+            'result': 'False',
+            'comment': 'Disabled'
+        }
+        return ret
+
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+
+    opts = _get_opts(kwargs.get('localconfig'))
 
     if test is None:
         if salt.utils.test_mode(test=test, **kwargs):
@@ -271,6 +515,9 @@ def highstate(test=None, queue=False, **kwargs):
             'Pillar data must be formatted as a dictionary'
         )
 
+    if 'pillarenv' in kwargs:
+        opts['pillarenv'] = kwargs['pillarenv']
+
     st_ = salt.state.HighState(opts, pillar, kwargs.get('__pub_jid'))
     st_.push_active()
     try:
@@ -287,22 +534,10 @@ def highstate(test=None, queue=False, **kwargs):
     if __salt__['config.option']('state_data', '') == 'terse' or \
             kwargs.get('terse'):
         ret = _filter_running(ret)
+
     serial = salt.payload.Serial(__opts__)
     cache_file = os.path.join(__opts__['cachedir'], 'highstate.p')
 
-    # Not 100% if this should be fatal or not,
-    # but I'm guessing it likely should not be.
-    cumask = os.umask(077)
-    try:
-        if salt.utils.is_windows():
-            # Make sure cache file isn't read-only
-            __salt__['cmd.run']('attrib -R "{0}"'.format(cache_file))
-        with salt.utils.fopen(cache_file, 'w+b') as fp_:
-            serial.dump(ret, fp_)
-    except (IOError, OSError):
-        msg = 'Unable to write to "state.highstate" cache file {0}'
-        log.error(msg.format(cache_file))
-    os.umask(cumask)
     _set_retcode(ret)
     # Work around Windows multiprocessing bug, set __opts__['test'] back to
     # value from before this function was run.
@@ -311,24 +546,51 @@ def highstate(test=None, queue=False, **kwargs):
 
 
 def sls(mods,
-        saltenv='base',
+        saltenv=None,
         test=None,
         exclude=None,
         queue=False,
         env=None,
-        concurrent=False,
+        pillarenv=None,
         **kwargs):
     '''
-    Execute a set list of state modules from an environment. The default
-    environment is ``base``, use ``saltenv`` (``env`` in Salt 0.17.x and older)
-    to specify a different environment
+    Execute a set list of state files from an environment.
 
-    Custom Pillar data can be passed with the ``pillar`` kwarg.
+    test
+        Notify states to execute in test-only (dry-run) mode.
 
+        Sets the ``test`` variable in the minion ``opts`` for the duration of
+        the state run.
+    pillar
+        Custom Pillar data can be passed with the ``pillar`` kwarg. Values
+        passed here will override hard-coded Pillar values.
+    queue : ``False``
+        Instead of failing immediately when another state run is in progress,
+        queue the new state run to begin running once the other has finished.
+
+        This option starts a new thread for each queued state run so use this
+        option sparingly.
+    saltenv : None
+        Specify a ``file_roots`` environment.
+
+        .. versionchanged:: 0.17.0
+            Argument name changed from ``env`` to ``saltenv``.
+        .. versionchanged:: 2014.7
+            Defaults to None. If no saltenv is specified, the minion config will
+            be checked for a saltenv and if found, it will be used. If none is found,
+            base will be used.
+    pillarenv : None
+        Specify a ``pillar_roots`` environment. By default all pillar environments
+        merged together will be used.
     concurrent:
         WARNING: This flag is potentially dangerous. It is designed
         for use when multiple state runs can safely be run at the same
         Do not use this flag for performance optimization.
+    localconfig:
+        Instead of using running minion opts, load ``localconfig`` and merge that
+        with the running minion opts. This functionality is intended for using
+        "roots" of salt directories (with their own minion config, pillars,
+        file_roots) to run highstate out of.
 
     CLI Example:
 
@@ -339,6 +601,7 @@ def sls(mods,
 
         salt '*' state.sls myslsfile pillar="{foo: 'Foo!', bar: 'Bar!'}"
     '''
+    concurrent = kwargs.get('concurrent', False)
     if env is not None:
         salt.utils.warn_until(
             'Boron',
@@ -347,6 +610,19 @@ def sls(mods,
         )
         # Backwards compatibility
         saltenv = env
+    if not saltenv:
+        if __opts__.get('environment', None):
+            saltenv = __opts__['environment']
+        else:
+            saltenv = 'base'
+    else:
+        __opts__['environment'] = saltenv
+
+    if not pillarenv:
+        if __opts__.get('pillarenv', None):
+            pillarenv = __opts__['pillarenv']
+    else:
+        __opts__['pillarenv'] = pillarenv
 
     if queue:
         _wait(kwargs.get('__pub_jid'))
@@ -355,13 +631,25 @@ def sls(mods,
         if conflict:
             __context__['retcode'] = 1
             return conflict
+
+    if isinstance(mods, list):
+        disabled = _disabled(mods)
+    else:
+        disabled = _disabled([mods])
+
+    if disabled:
+        for state in disabled:
+            log.debug('Salt state {0} run is disabled. To re-enable, run state.enable {0}'.format(state))
+        __context__['retcode'] = 1
+        return disabled
+
     if not _check_pillar(kwargs):
         __context__['retcode'] = 5
         err = ['Pillar failed to render with the following messages:']
         err += __pillar__['_errors']
         return err
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
 
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
@@ -390,7 +678,7 @@ def sls(mods,
                 high_ = serial.load(fp_)
                 return st_.state.call_high(high_)
 
-    if isinstance(mods, string_types):
+    if isinstance(mods, six.string_types):
         mods = mods.split(',')
 
     st_.push_active()
@@ -414,11 +702,11 @@ def sls(mods,
     if __salt__['config.option']('state_data', '') == 'terse' or kwargs.get('terse'):
         ret = _filter_running(ret)
     cache_file = os.path.join(__opts__['cachedir'], 'sls.p')
-    cumask = os.umask(077)
+    cumask = os.umask(0o77)
     try:
         if salt.utils.is_windows():
             # Make sure cache file isn't read-only
-            __salt__['cmd.run']('attrib -R "{0}"'.format(cache_file))
+            __salt__['cmd.run'](['attrib', '-R', cache_file], python_shell=False)
         with salt.utils.fopen(cache_file, 'w+b') as fp_:
             serial.dump(ret, fp_)
     except (IOError, OSError):
@@ -443,7 +731,11 @@ def sls(mods,
     return ret
 
 
-def top(topfn, test=None, queue=False, **kwargs):
+def top(topfn,
+        test=None,
+        queue=False,
+        saltenv=None,
+        **kwargs):
     '''
     Execute a specific top file instead of the default
 
@@ -464,7 +756,7 @@ def top(topfn, test=None, queue=False, **kwargs):
         err += __pillar__['_errors']
         return err
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
     else:
@@ -478,7 +770,9 @@ def top(topfn, test=None, queue=False, **kwargs):
 
     st_ = salt.state.HighState(opts, pillar)
     st_.push_active()
-    st_.opts['state_top'] = os.path.join('salt://', topfn)
+    st_.opts['state_top'] = salt.utils.url.create(topfn)
+    if saltenv:
+        st_.opts['state_top_saltenv'] = saltenv
     try:
         ret = st_.call_highstate(
                 exclude=kwargs.get('exclude', []),
@@ -552,14 +846,14 @@ def show_lowstate(queue=False, **kwargs):
 def sls_id(
         id_,
         mods,
-        saltenv,
+        saltenv='base',
         test=None,
         queue=False,
         **kwargs):
     '''
     Call a single ID from the named module(s) and handle all requisites
 
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     CLI Example:
 
@@ -571,17 +865,19 @@ def sls_id(
     if conflict is not None:
         return conflict
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
     else:
         opts['test'] = __opts__.get('test', None)
+    if 'pillarenv' in kwargs:
+        opts['pillarenv'] = kwargs['pillarenv']
     st_ = salt.state.HighState(opts)
-    if isinstance(mods, string_types):
-        mods = mods.split(',')
+    if isinstance(mods, six.string_types):
+        split_mods = mods.split(',')
     st_.push_active()
     try:
-        high_, errors = st_.render_highstate({saltenv: mods})
+        high_, errors = st_.render_highstate({saltenv: split_mods})
     finally:
         st_.pop_active()
     errors += st_.state.verify_high(high_)
@@ -589,12 +885,18 @@ def sls_id(
         __context__['retcode'] = 1
         return errors
     chunks = st_.state.compile_high_data(high_)
+    ret = {}
     for chunk in chunks:
         if chunk.get('__id__', '') == id_:
-            ret = st_.state.call_chunk(chunk, {}, chunks)
+            ret.update(st_.state.call_chunk(chunk, {}, chunks))
     # Work around Windows multiprocessing bug, set __opts__['test'] back to
     # value from before this function was run.
     __opts__['test'] = orig_test
+    if not ret:
+        raise SaltInvocationError(
+            'No matches for ID \'{0}\' found in SLS \'{1}\' within saltenv '
+            '\'{2}\''.format(id_, mods, saltenv)
+        )
     return ret
 
 
@@ -627,13 +929,15 @@ def show_low_sls(mods,
     if conflict is not None:
         return conflict
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
     else:
         opts['test'] = __opts__.get('test', None)
+    if 'pillarenv' in kwargs:
+        opts['pillarenv'] = kwargs['pillarenv']
     st_ = salt.state.HighState(opts)
-    if isinstance(mods, string_types):
+    if isinstance(mods, six.string_types):
         mods = mods.split(',')
     st_.push_active()
     try:
@@ -680,7 +984,7 @@ def show_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwargs):
     if conflict is not None:
         return conflict
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
 
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
@@ -693,8 +997,11 @@ def show_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwargs):
             'Pillar data must be formatted as a dictionary'
         )
 
+    if 'pillarenv' in kwargs:
+        opts['pillarenv'] = kwargs['pillarenv']
+
     st_ = salt.state.HighState(opts, pillar)
-    if isinstance(mods, string_types):
+    if isinstance(mods, six.string_types):
         mods = mods.split(',')
     st_.push_active()
     try:
@@ -721,10 +1028,20 @@ def show_top(queue=False, **kwargs):
 
         salt '*' state.show_top
     '''
+    opts = copy.deepcopy(__opts__)
+    if 'env' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'env\'. This functionality will be removed in Salt Boron.'
+        )
+        opts['environment'] = kwargs['env']
+    elif 'saltenv' in kwargs:
+        opts['environment'] = kwargs['saltenv']
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.HighState(__opts__)
+    st_ = salt.state.HighState(opts)
     errors = []
     top_ = st_.get_top()
     errors += st_.verify_tops(top_)
@@ -764,7 +1081,7 @@ def single(fun, name, test=None, queue=False, **kwargs):
                    '__id__': name,
                    'name': name})
     orig_test = __opts__.get('test', None)
-    opts = copy.deepcopy(__opts__)
+    opts = _get_opts(kwargs.get('localconfig'))
     if salt.utils.test_mode(test=test, **kwargs):
         opts['test'] = True
     else:
@@ -848,13 +1165,17 @@ def pkg(pkg_path, pkg_sum, hash_type, test=False, **kwargs):
     lowstate_json = os.path.join(root, 'lowstate.json')
     with salt.utils.fopen(lowstate_json, 'r') as fp_:
         lowstate = json.load(fp_, object_hook=salt.utils.decode_dict)
+    # Check for errors in the lowstate
+    for chunk in lowstate:
+        if not isinstance(chunk, dict):
+            return lowstate
     pillar_json = os.path.join(root, 'pillar.json')
     if os.path.isfile(pillar_json):
         with salt.utils.fopen(pillar_json, 'r') as fp_:
             pillar = json.load(fp_)
     else:
         pillar = None
-    popts = copy.deepcopy(__opts__)
+    popts = _get_opts(kwargs.get('localconfig'))
     popts['fileclient'] = 'local'
     popts['file_roots'] = {}
     if salt.utils.test_mode(test=test, **kwargs):
@@ -868,11 +1189,163 @@ def pkg(pkg_path, pkg_sum, hash_type, test=False, **kwargs):
             continue
         popts['file_roots'][fn_] = [full]
     st_ = salt.state.State(popts, pillar=pillar)
-    st_.functions['saltutil.sync_all'](envs)
-    st_.module_refresh()
     ret = st_.call_chunks(lowstate)
     try:
         shutil.rmtree(root)
     except (IOError, OSError):
         pass
+    return ret
+
+
+def disable(states):
+    '''
+    Disable state runs.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.disable highstate
+
+        salt '*' state.disable highstate,test.succeed_without_changes
+
+    .. note::
+        To disable a state file from running provide the same name that would
+        be passed in a state.sls call.
+
+        salt '*' state.disable bind.config
+
+    '''
+    ret = {
+        'res': True,
+        'msg': ''
+    }
+
+    if isinstance(states, six.string_types):
+        states = states.split(',')
+
+    msg = []
+    _disabled = __salt__['grains.get']('state_runs_disabled')
+    if not isinstance(_disabled, list):
+        _disabled = []
+
+    _changed = False
+    for _state in states:
+        if _state in _disabled:
+            msg.append('Info: {0} state already disabled.'.format(_state))
+        else:
+            msg.append('Info: {0} state disabled.'.format(_state))
+            _disabled.append(_state)
+            _changed = True
+
+    if _changed:
+        __salt__['grains.setval']('state_runs_disabled', _disabled)
+
+    ret['msg'] = '\n'.join(msg)
+
+    # refresh the grains
+    __salt__['saltutil.refresh_modules']()
+
+    return ret
+
+
+def enable(states):
+    '''
+    Enable state function or sls run
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.enable highstate
+
+        salt '*' state.enable test.succeed_without_changes
+
+    .. note::
+        To enable a state file from running provide the same name that would
+        be passed in a state.sls call.
+
+        salt '*' state.disable bind.config
+
+    '''
+    ret = {
+        'res': True,
+        'msg': ''
+    }
+
+    if isinstance(states, six.string_types):
+        states = states.split(',')
+    log.debug("states {0}".format(states))
+
+    msg = []
+    _disabled = __salt__['grains.get']('state_runs_disabled')
+    if not isinstance(_disabled, list):
+        _disabled = []
+
+    _changed = False
+    for _state in states:
+        log.debug("_state {0}".format(_state))
+        if _state not in _disabled:
+            msg.append('Info: {0} state already enabled.'.format(_state))
+        else:
+            msg.append('Info: {0} state enabled.'.format(_state))
+            _disabled.remove(_state)
+            _changed = True
+
+    if _changed:
+        __salt__['grains.setval']('state_runs_disabled', _disabled)
+
+    ret['msg'] = '\n'.join(msg)
+
+    # refresh the grains
+    __salt__['saltutil.refresh_modules']()
+
+    return ret
+
+
+def list_disabled():
+    '''
+    List the states which are currently disabled
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.list_disabled
+    '''
+    return __salt__['grains.get']('state_runs_disabled')
+
+
+def _disabled(funs):
+    '''
+    Return messages for disabled states
+    that match state functions in funs.
+    '''
+    ret = []
+    _disabled = __salt__['grains.get']('state_runs_disabled')
+    for state in funs:
+        for _state in _disabled:
+            if '.*' in _state:
+                target_state = _state.split('.')[0]
+                target_state = target_state + '.' if not target_state.endswith('.') else target_state
+                if state.startswith(target_state):
+                    err = (
+                        'The state file "{0}" is currently disabled by "{1}", '
+                        'to re-enable, run state.enable {1}.'
+                    ).format(
+                        state,
+                        _state,
+                    )
+                    ret.append(err)
+                    continue
+            else:
+                if _state == state:
+                    err = (
+                        'The state file "{0}" is currently disabled, '
+                        'to re-enable, run state.enable {0}.'
+                    ).format(
+                        _state,
+                    )
+                    ret.append(err)
+                    continue
     return ret

@@ -2,7 +2,7 @@
 '''
 Utilities for working with etcd
 
-.. versionadded:: Helium
+.. versionadded:: 2014.7.0
 
 :depends:  - python-etcd
 
@@ -33,6 +33,7 @@ It should be noted that some usages of etcd require a profile to be specified,
 rather than top-level configurations. This being the case, it is better to
 always use a named configuration profile, as shown above.
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -53,7 +54,7 @@ log = logging.getLogger(__name__)
 
 def get_conn(opts, profile=None):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Return a client object for accessing etcd
     '''
@@ -84,7 +85,7 @@ def get_conn(opts, profile=None):
 
 def tree(client, path):
     '''
-    .. versionadded:: Helium
+    .. versionadded:: 2014.7.0
 
     Recurse through etcd and return all values
     '''

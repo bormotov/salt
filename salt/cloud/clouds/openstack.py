@@ -6,6 +6,8 @@ OpenStack Cloud Module
 OpenStack is an open source project that is in use by a number a cloud
 providers, each of which have their own ways of using it.
 
+:depends: libcloud >- 0.13.2
+
 OpenStack provides a number of ways to authenticate. This module uses password-
 based authentication, using auth v2.0. It is likely to start supporting other
 methods of authentication provided by OpenStack in the future.
@@ -51,8 +53,10 @@ Set up in the cloud configuration at ``/etc/salt/cloud.providers`` or
               /local/path/to/src.txt
       # Skips the service catalog API endpoint, and uses the following
       base_url: http://192.168.1.101:3000/v2/12345
-      provider: openstack
+      driver: openstack
       userdata_file: /tmp/userdata.txt
+      # config_drive is required for userdata at rackspace
+      config_drive: True
 
 For in-house Openstack Essex installation, libcloud needs the service_type :
 
@@ -114,6 +118,7 @@ Alternatively, one could use the private IP to connect by specifying:
 
 
 '''
+from __future__ import absolute_import
 
 # The import section is mostly libcloud boilerplate
 
@@ -150,7 +155,7 @@ import salt.utils.cloud
 import salt.utils.pycrypto as sup
 import salt.config as config
 from salt.utils import namespaced_function
-from salt.cloud.exceptions import (
+from salt.exceptions import (
     SaltCloudConfigError,
     SaltCloudNotFound,
     SaltCloudSystemExit,
@@ -197,6 +202,12 @@ def __virtual__():
 
     if get_configured_provider() is False:
         return False
+
+    salt.utils.warn_until(
+        'Carbon',
+        'This driver has been deprecated and will be removed in the '
+        'Carbon release of Salt. Please use the nova driver instead.'
+    )
 
     return True
 
@@ -289,6 +300,8 @@ def get_conn():
                     )
                 else:
                     actual_password = provider_password
+            else:
+                actual_password = driver_password
         else:
             actual_password = password
         return driver(
@@ -380,6 +393,71 @@ def managedcloud(vm_):
     )
 
 
+def networks(vm_, kwargs=None):
+    conn = get_conn()
+    if kwargs is None:
+        kwargs = {}
+    networks = config.get_cloud_config_value(
+        'networks', vm_, __opts__, search_global=False
+    )
+
+    floating = []
+
+    if HAS014:
+        if networks is not None:
+            for net in networks:
+                if 'fixed' in net:
+                    kwargs['networks'] = [
+                        OpenStackNetwork(n, None, None, None)
+                        for n in net['fixed']
+                    ]
+                elif 'floating' in net:
+                    pool = OpenStack_1_1_FloatingIpPool(
+                        net['floating'], conn.connection
+                    )
+                    for idx in pool.list_floating_ips():
+                        if idx.node_id is None:
+                            floating.append(idx)
+                    if not floating:
+                        # Note(pabelanger): We have no available floating IPs.
+                        # For now, we raise an exception and exit.
+                        # A future enhancement might be to allow salt-cloud
+                        # to dynamically allocate new address but that might
+                        raise SaltCloudSystemExit(
+                            'Floating pool {0!r} does not have any more '
+                            'please create some more or use a different '
+                            'pool.'.format(net['floating'])
+                        )
+        # otherwise, attempt to obtain list without specifying pool
+        # this is the same as 'nova floating-ip-list'
+        elif ssh_interface(vm_) != 'private_ips':
+            try:
+                # This try/except is here because it appears some
+                # *cough* Rackspace *cough*
+                # OpenStack providers return a 404 Not Found for the
+                # floating ip pool URL if there are no pools setup
+                pool = OpenStack_1_1_FloatingIpPool(
+                    '', conn.connection
+                )
+                for idx in pool.list_floating_ips():
+                    if idx.node_id is None:
+                        floating.append(idx)
+                if not floating:
+                    # Note(pabelanger): We have no available floating IPs.
+                    # For now, we raise an exception and exit.
+                    # A future enhancement might be to allow salt-cloud to
+                    # dynamically allocate new address but that might be
+                    # tricky to manage.
+                    raise SaltCloudSystemExit(
+                        'There are no more floating IP addresses '
+                        'available, please create some more'
+                    )
+            except Exception as e:
+                if not str(e).startswith('404'):
+                    raise
+    vm_['floating'] = floating
+
+
 def request_instance(vm_=None, call=None):
     '''
     Put together all of the information necessary to request an instance on Openstack
@@ -450,67 +528,7 @@ def request_instance(vm_=None, call=None):
             g for g in avail_groups if g.name in group_list
         ]
 
-    networks = config.get_cloud_config_value(
-        'networks', vm_, __opts__, search_global=False
-    )
-
-    floating = []
-
-    if HAS014:
-        if networks is not None:
-            for net in networks:
-                if 'fixed' in net:
-                    kwargs['networks'] = [
-                        OpenStackNetwork(n, None, None, None)
-                        for n in net['fixed']
-                    ]
-                elif 'floating' in net:
-                    pool = OpenStack_1_1_FloatingIpPool(
-                        net['floating'], conn.connection
-                    )
-                    for idx in pool.list_floating_ips():
-                        if idx.node_id is None:
-                            floating.append(idx)
-                    if not floating:
-                        # Note(pabelanger): We have no available floating IPs.
-                        # For now, we raise an exception and exit.
-                        # A future enhancement might be to allow salt-cloud
-                        # to dynamically allocate new address but that might
-                        raise SaltCloudSystemExit(
-                            'Floating pool {0!r} does not have any more '
-                            'please create some more or use a different '
-                            'pool.'.format(net['floating'])
-                        )
-        # otherwise, attempt to obtain list without specifying pool
-        # this is the same as 'nova floating-ip-list'
-        elif ssh_interface(vm_) != 'private_ips':
-            try:
-                # This try/except is here because it appears some
-                # *cough* Rackspace *cough*
-                # OpenStack providers return a 404 Not Found for the
-                # floating ip pool URL if there are no pools setup
-                pool = OpenStack_1_1_FloatingIpPool(
-                    '', conn.connection
-                )
-                for idx in pool.list_floating_ips():
-                    if idx.node_id is None:
-                        floating.append(idx)
-                if not floating:
-                    # Note(pabelanger): We have no available floating IPs.
-                    # For now, we raise an exception and exit.
-                    # A future enhancement might be to allow salt-cloud to
-                    # dynamically allocate new address but that might be
-                    # tricky to manage.
-                    raise SaltCloudSystemExit(
-                        'There are no more floating IP addresses '
-                        'available, please create some more'
-                    )
-            except Exception as e:
-                if str(e).startswith('404'):
-                    pass
-                else:
-                    raise
-    vm_['floating'] = floating
+    networks(vm_, kwargs)
 
     files = config.get_cloud_config_value(
         'files', vm_, __opts__, search_global=False
@@ -528,6 +546,12 @@ def request_instance(vm_=None, call=None):
     if userdata_file is not None:
         with salt.utils.fopen(userdata_file, 'r') as fp:
             kwargs['ex_userdata'] = fp.read()
+
+    config_drive = config.get_cloud_config_value(
+        'config_drive', vm_, __opts__, default=None, search_global=False
+    )
+    if config_drive is not None:
+        kwargs['ex_config_drive'] = config_drive
 
     salt.utils.cloud.fire_event(
         'event',
@@ -569,6 +593,20 @@ def create(vm_):
     '''
     Create a single VM from a data dict
     '''
+    try:
+        # Check for required profile parameters before sending any API calls.
+        if config.is_profile_configured(__opts__,
+                                        __active_provider_name__ or 'openstack',
+                                        vm_['profile']) is False:
+            return False
+    except AttributeError:
+        pass
+
+    # Since using "provider: <provider-engine>" is deprecated, alias provider
+    # to use driver: "driver: <provider-engine>"
+    if 'provider' in vm_:
+        vm_['driver'] = vm_.pop('provider')
+
     deploy = config.get_cloud_config_value('deploy', vm_, __opts__)
     key_filename = config.get_cloud_config_value(
         'ssh_key_file', vm_, __opts__, search_global=False, default=None
@@ -582,14 +620,6 @@ def create(vm_):
                 )
             )
 
-    if deploy is True and key_filename is None and \
-            salt.utils.which('sshpass') is None:
-        raise SaltCloudSystemExit(
-            'Cannot deploy salt in a VM if the \'ssh_key_file\' setting '
-            'is not set and \'sshpass\' binary is not present on the '
-            'system for the password.'
-        )
-
     vm_['key_filename'] = key_filename
 
     salt.utils.cloud.fire_event(
@@ -599,7 +629,7 @@ def create(vm_):
         {
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
         transport=__opts__['transport']
     )
@@ -618,9 +648,11 @@ def create(vm_):
                     __opts__
                 )
             )
+        data = conn.ex_get_node_details(vm_['instance_id'])
         if vm_['key_filename'] is None and 'change_password' in __opts__ and __opts__['change_password'] is True:
             vm_['password'] = sup.secure_password()
-            conn.root_password(vm_['instance_id'], vm_['password'])
+            conn.ex_set_password(data, vm_['password'])
+        networks(vm_)
     else:
         # Put together all of the information required to request the instance,
         # and then fire off the request for it
@@ -644,7 +676,7 @@ def create(vm_):
                     err
                 ),
                 # Show the traceback if the debug logging level is enabled
-                exc_info=log.isEnabledFor(logging.DEBUG)
+                exc_info_on_loglevel=logging.DEBUG
             )
             # Trigger a failure in the wait for IP function
             return False
@@ -756,7 +788,7 @@ def create(vm_):
         except SaltCloudSystemExit:
             pass
         finally:
-            raise SaltCloudSystemExit(exc.message)
+            raise SaltCloudSystemExit(str(exc))
 
     log.debug('VM is now running')
 
@@ -768,9 +800,17 @@ def create(vm_):
         ip_address = preferred_ip(vm_, data.public_ips)
     log.debug('Using IP address {0}'.format(ip_address))
 
+    if salt.utils.cloud.get_salt_interface(vm_, __opts__) == 'private_ips':
+        salt_ip_address = preferred_ip(vm_, data.private_ips)
+        log.info('Salt interface set to: {0}'.format(salt_ip_address))
+    else:
+        salt_ip_address = preferred_ip(vm_, data.public_ips)
+        log.debug('Salt interface set to: {0}'.format(salt_ip_address))
+
     if not ip_address:
         raise SaltCloudSystemExit('A valid IP address was not found')
 
+    vm_['salt_host'] = salt_ip_address
     vm_['ssh_host'] = ip_address
     ret = salt.utils.cloud.bootstrap(vm_, __opts__)
     ret.update(data.__dict__)
@@ -792,7 +832,7 @@ def create(vm_):
         {
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
         transport=__opts__['transport']
     )

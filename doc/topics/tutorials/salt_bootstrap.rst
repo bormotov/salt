@@ -40,8 +40,8 @@ Supported Operating Systems
 .. note::
 
     In the event you do not see your distribution or version available please
-    review the develop branch on Github as it main contain updates that are
-    not present in the stable release: 
+    review the develop branch on GitHub as it main contain updates that are
+    not present in the stable release:
     https://github.com/saltstack/salt-bootstrap/tree/develop
 
 
@@ -49,17 +49,17 @@ Supported Operating Systems
 Example Usage
 ~~~~~~~~~~~~~
 
-If you're looking for the *one-liner* to install salt, please scroll to the 
+If you're looking for the *one-liner* to install salt, please scroll to the
 bottom and use the instructions for `Installing via an Insecure One-Liner`_
 
-.. Note::
+.. note::
     In every two-step example, you would be well-served to examine the downloaded file and examine
     it to ensure that it does what you expect.
 
 
 Using ``curl`` to install latest git:
 
-.. code:: console
+.. code-block:: bash
 
   curl -L https://bootstrap.saltstack.com -o install_salt.sh
   sudo sh install_salt.sh git develop
@@ -67,7 +67,7 @@ Using ``curl`` to install latest git:
 
 Using ``wget`` to install your distribution's stable packages:
 
-.. code:: console
+.. code-block:: bash
 
   wget -O install_salt.sh https://bootstrap.saltstack.com
   sudo sh install_salt.sh
@@ -75,14 +75,14 @@ Using ``wget`` to install your distribution's stable packages:
 
 Install a specific version from git using ``wget``:
 
-.. code:: console
+.. code-block:: bash
 
   wget -O install_salt.sh https://bootstrap.saltstack.com
   sudo sh install_salt.sh -P git v0.16.4
 
 If you already have python installed, ``python 2.6``, then it's as easy as:
 
-.. code:: console
+.. code-block:: bash
 
   python -m urllib "https://bootstrap.saltstack.com" > install_salt.sh
   sudo sh install_salt.sh git develop
@@ -90,16 +90,16 @@ If you already have python installed, ``python 2.6``, then it's as easy as:
 
 All python versions should support the following one liner:
 
-.. code:: console
+.. code-block:: bash
 
   python -c 'import urllib; print urllib.urlopen("https://bootstrap.saltstack.com").read()' > install_salt.sh
   sudo sh install_salt.sh git develop
 
 
-On a FreeBSD base system you usually don't have either of the above binaries available. You **do** 
+On a FreeBSD base system you usually don't have either of the above binaries available. You **do**
 have ``fetch`` available though:
 
-.. code:: console
+.. code-block:: bash
 
   fetch -o install_salt.sh https://bootstrap.saltstack.com
   sudo sh install_salt.sh
@@ -107,24 +107,24 @@ have ``fetch`` available though:
 
 If all you want is to install a ``salt-master`` using latest git:
 
-.. code:: console
+.. code-block:: bash
 
-  curl -o install_salt.sh.sh -L https://bootstrap.saltstack.com
-  sudo sh install_salt.sh.sh -M -N git develop
+  curl -o install_salt.sh -L https://bootstrap.saltstack.com
+  sudo sh install_salt.sh -M -N git develop
 
 If you want to install a specific release version (based on the git tags):
 
-.. code:: console
+.. code-block:: bash
 
-  curl -o install_salt.sh.sh -L https://bootstrap.saltstack.com
-  sudo sh install_salt.sh.sh git v0.16.4
+  curl -o install_salt.sh -L https://bootstrap.saltstack.com
+  sudo sh install_salt.sh git v0.16.4
 
 To install a specific branch from a git fork:
 
-.. code:: console
+.. code-block:: bash
 
-  curl -o install_salt.sh.sh -L https://bootstrap.saltstack.com
-  sudo sh install_salt.sh.sh -g https://github.com/myuser/salt.git git mybranch
+  curl -o install_salt.sh -L https://bootstrap.saltstack.com
+  sudo sh install_salt.sh -g https://github.com/myuser/salt.git git mybranch
 
 
 Installing via an Insecure One-Liner
@@ -132,9 +132,10 @@ Installing via an Insecure One-Liner
 
 The following examples illustrate how to install Salt via a one-liner.
 
-.. Note::
-    Warning! These methods do not involve a verification step and assume that the delivered file
-    is trustworthy.
+.. note::
+
+    Warning! These methods do not involve a verification step and assume that
+    the delivered file is trustworthy.
 
 
 Examples
@@ -142,7 +143,7 @@ Examples
 
 Installing the latest develop branch of Salt:
 
-.. code:: console
+.. code-block:: bash
 
   curl -L https://bootstrap.saltstack.com | sudo sh -s -- git develop
 
@@ -231,17 +232,19 @@ passed):
 Command Line Options
 --------------------
 
-Here's a summary of the command line options::
+Here's a summary of the command line options:
+
+.. code-block:: bash
 
     $ sh bootstrap-salt.sh -h
-    
+
       Usage :  bootstrap-salt.sh [options] <install-type> <install-type-args>
-    
+
       Installation types:
         - stable (default)
         - daily  (ubuntu specific)
         - git
-    
+
       Examples:
         $ bootstrap-salt.sh
         $ bootstrap-salt.sh stable
@@ -250,7 +253,7 @@ Here's a summary of the command line options::
         $ bootstrap-salt.sh git develop
         $ bootstrap-salt.sh git v0.17.0
         $ bootstrap-salt.sh git 8c3fadf15ec183e5ce8c63739850d543617e4357
-    
+
       Options:
       -h  Display this message
       -v  Display script version
