@@ -13,7 +13,14 @@ if six.PY3:
     import ipaddress
 else:
     import salt.ext.ipaddress as ipaddress
-from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
+
+
+# Fix included in py2-ipaddress for 32bit architectures
+# Except that xrange only supports machine integers, not longs, so...
+def long_range(start, end):
+    while start < end:
+        yield start
+        start += 1
 
 # Import salt libs
 import salt.utils
@@ -279,9 +286,9 @@ def list_sets(family='ipv4'):
 
 def check_set(set=None, family='ipv4'):
     '''
-    .. versionadded:: 2014.7.0
-
     Check that given ipset set exists.
+
+    .. versionadded:: 2014.7.0
 
     CLI Example:
 
@@ -395,7 +402,7 @@ def check(set=None, entry=None, family='ipv4'):
         An entry in the ipset.  This parameter can be a single IP address, a
         range of IP addresses, or a subnet block.  Example:
 
-        .. code-block::
+        .. code-block:: cfg
 
             192.168.0.1
             192.168.0.2-192.168.0.19
@@ -427,7 +434,7 @@ def check(set=None, entry=None, family='ipv4'):
             start, end = entry.split('-')
 
             if settype == 'hash:ip':
-                entries = [str(ipaddress.ip_address(ip)) for ip in range(
+                entries = [str(ipaddress.ip_address(ip)) for ip in long_range(
                     ipaddress.ip_address(start),
                     ipaddress.ip_address(end) + 1
                 )]

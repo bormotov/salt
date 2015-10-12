@@ -170,10 +170,9 @@ def _changes(name,
         change['homephone'] = homephone
     # OpenBSD/FreeBSD login class
     if __grains__['kernel'] in ('OpenBSD', 'FreeBSD'):
-        if not loginclass:
-            loginclass = '""'
-        if __salt__['user.get_loginclass'](name)['loginclass'] != loginclass:
-            change['loginclass'] = loginclass
+        if loginclass:
+            if __salt__['user.get_loginclass'](name) != loginclass:
+                change['loginclass'] = loginclass
 
     return change
 
@@ -256,7 +255,8 @@ def present(name,
 
     password
         A password hash to set for the user. This field is only supported on
-        Linux, FreeBSD, NetBSD, OpenBSD, and Solaris.
+        Linux, FreeBSD, NetBSD, OpenBSD, and Solaris. If the ``empty_password``
+        argument is set to ``True`` then ``password`` is ignored.
         For Windows this is the plain text password.
 
     .. versionchanged:: 0.16.0
@@ -434,6 +434,8 @@ def present(name,
             ret['comment'] = ('The following user attributes are set to be '
                               'changed:\n')
             for key, val in six.iteritems(changes):
+                if key == 'password':
+                    val = 'XXX-REDACTED-XXX'
                 ret['comment'] += '{0}: {1}\n'.format(key, val)
             return ret
         # The user is present
@@ -506,8 +508,8 @@ def present(name,
             for key in spost:
                 if lshad[key] != spost[key]:
                     ret['changes'][key] = spost[key]
-        if __grains__['kernel'] in ('OpenBSD', 'FreeBSD') and lcpost['loginclass'] != lcpre['loginclass']:
-            ret['changes']['loginclass'] = lcpost['loginclass']
+        if __grains__['kernel'] in ('OpenBSD', 'FreeBSD') and lcpost != lcpre:
+            ret['changes']['loginclass'] = lcpost
         if ret['changes']:
             ret['comment'] = 'Updated user {0}'.format(name)
         changes = _changes(name,
@@ -594,9 +596,9 @@ def present(name,
                     if spost['passwd'] != password:
                         ret['comment'] = 'User {0} created but failed to set' \
                                          ' password to' \
-                                         ' {1}'.format(name, password)
+                                         ' {1}'.format(name, 'XXX-REDACTED-XXX')
                         ret['result'] = False
-                    ret['changes']['password'] = password
+                    ret['changes']['password'] = 'XXX-REDACTED-XXX'
                 if date:
                     __salt__['shadow.set_date'](name, date)
                     spost = __salt__['shadow.info'](name)
@@ -652,7 +654,12 @@ def present(name,
                         ret['result'] = False
                     ret['changes']['expire'] = expire
             elif salt.utils.is_windows() and password and not empty_password:
-                ret['changes']['passwd'] = password
+                if not __salt__['user.setpassword'](name, password):
+                    ret['comment'] = 'User {0} created but failed to set' \
+                                     ' password to' \
+                                     ' {1}'.format(name, 'XXX-REDACTED-XXX')
+                    ret['result'] = False
+                ret['changes']['passwd'] = 'XXX-REDACTED-XXX'
         else:
             ret['comment'] = 'Failed to create new user {0}'.format(name)
             ret['result'] = False

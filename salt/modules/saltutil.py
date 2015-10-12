@@ -161,6 +161,13 @@ def _sync(form, saltenv=None):
         mod_file = os.path.join(__opts__['cachedir'], 'module_refresh')
         with salt.utils.fopen(mod_file, 'a+') as ofile:
             ofile.write('')
+    if form == 'grains' and \
+       __opts__.get('grains_cache') and \
+       os.path.isfile(os.path.join(__opts__['cachedir'], 'grains.cache.p')):
+        try:
+            os.remove(os.path.join(__opts__['cachedir'], 'grains.cache.p'))
+        except OSError:
+            log.error('Could not remove grains cache!')
     return ret
 
 
@@ -383,23 +390,25 @@ def sync_returners(saltenv=None, refresh=True):
     return ret
 
 
-def sync_outputters(saltenv=None, refresh=True):
+def sync_output(saltenv=None, refresh=True):
     '''
-    Sync the outputters from the _outputters directory on the salt master file
-    server. This function is environment aware, pass the desired environment
-    to grab the contents of the _outputters directory, base is the default
+    Sync the output modules from the _output directory on the salt master file
+    server. This function is environment aware. Pass the desired environment
+    to grab the contents of the _output directory. Base is the default
     environment.
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' saltutil.sync_outputters
+        salt '*' saltutil.sync_output
     '''
-    ret = _sync('outputters', saltenv)
+    ret = _sync('output', saltenv)
     if refresh:
         refresh_modules()
     return ret
+
+sync_outputters = sync_output
 
 
 def sync_utils(saltenv=None, refresh=True):
@@ -445,7 +454,8 @@ def sync_log_handlers(saltenv=None, refresh=True):
 def sync_all(saltenv=None, refresh=True):
     '''
     Sync down all of the dynamic modules from the file server for a specific
-    environment
+    environment. This function synchronizes custom modules, states, beacons,
+    grains, returners, output modules, renderers, and utils.
 
     refresh : True
         Also refresh the execution modules and pillar data available to the minion.
@@ -481,7 +491,7 @@ def sync_all(saltenv=None, refresh=True):
     ret['grains'] = sync_grains(saltenv, False)
     ret['renderers'] = sync_renderers(saltenv, False)
     ret['returners'] = sync_returners(saltenv, False)
-    ret['outputters'] = sync_outputters(saltenv, False)
+    ret['output'] = sync_output(saltenv, False)
     ret['utils'] = sync_utils(saltenv, False)
     ret['log_handlers'] = sync_log_handlers(saltenv, False)
     if refresh:
@@ -634,7 +644,8 @@ def find_job(jid):
 
 def find_cached_job(jid):
     '''
-    Return the data for a specific cached job id
+    Return the data for a specific cached job id. Note this only works if
+    cache_jobs has previously been set to True on the minion.
 
     CLI Example:
 
@@ -892,7 +903,7 @@ def runner(_fun, **kwargs):
     '''
     Execute a runner module (this function must be run on the master)
 
-    .. versionadded:: 2014.7
+    .. versionadded:: 2014.7.0
 
     name
         The name of the function to run
@@ -922,7 +933,7 @@ def wheel(_fun, **kwargs):
     '''
     Execute a wheel module (this function must be run on the master)
 
-    .. versionadded:: 2014.7
+    .. versionadded:: 2014.7.0
 
     name
         The name of the function to run

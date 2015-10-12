@@ -124,7 +124,6 @@ class GitProvider(object):
         self.env_whitelist = self.opts.get(
             '{0}_env_whitelist'.format(self.role), [])
         repo_conf = copy.deepcopy(per_remote_defaults)
-        bad_per_remote_conf = False
 
         per_remote_collisions = [x for x in override_params
                                  if x in PER_REMOTE_ONLY]
@@ -189,7 +188,7 @@ class GitProvider(object):
                         )
                     log.critical(msg)
                 else:
-                    log.critical(
+                    msg = (
                         'Invalid {0} configuration parameter \'{1}\' in '
                         'remote {2}. Valid parameters are: {3}.'.format(
                             self.role,
@@ -203,6 +202,7 @@ class GitProvider(object):
                             ' See the GitFS Walkthrough in the Salt '
                             'documentation for further information.'
                         )
+                    log.critical(msg)
 
                 per_remote_errors = True
             if per_remote_errors:
@@ -742,7 +742,7 @@ class Pygit2(GitProvider):
         for line in subprocess.Popen(
                 'git ls-remote origin',
                 shell=True,
-                close_fds=True,
+                close_fds=not salt.utils.is_windows(),
                 cwd=self.repo.workdir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT).communicate()[0].splitlines():
@@ -1508,7 +1508,7 @@ class GitBase(object):
             self.cache_root = os.path.join(self.opts['cachedir'], self.role)
         self.env_cache = os.path.join(self.cache_root, 'envs.p')
         self.hash_cachedir = os.path.join(
-            self.cache_root, self.role, 'hash')
+            self.cache_root, 'hash')
         self.file_list_cachedir = os.path.join(
             self.opts['cachedir'], 'file_lists', self.role)
 

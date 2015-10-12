@@ -54,6 +54,11 @@ def orchestrate(mods, saltenv='base', test=None, exclude=None, pillar=None):
             exclude,
             pillar=pillar)
     ret = {minion.opts['id']: running, 'outputter': 'highstate'}
+    res = salt.utils.check_state_result(ret)
+    if salt.utils.check_state_result(ret):
+        ret['retcode'] = 0
+    else:
+        ret['retcode'] = 1
     return ret
 
 # Aliases for orchestrate runner
@@ -176,7 +181,7 @@ def event(tagmatch='*',
 
     .. seealso::
 
-        See :glob:`tests/eventlisten.sh` for an example of usage within a shell
+        See :blob:`tests/eventlisten.sh` for an example of usage within a shell
         script.
     '''
     statemod = salt.loader.raw_mod(__opts__, 'state', None)

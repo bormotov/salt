@@ -12,6 +12,7 @@ as those returned here
 
 # Import python libs
 from __future__ import absolute_import
+import itertools
 import os
 import socket
 import sys
@@ -984,6 +985,7 @@ _OS_FAMILY_MAP = {
     'OpenSolaris Development': 'Solaris',
     'OpenSolaris': 'Solaris',
     'Arch ARM': 'Arch',
+    'Manjaro': 'Arch',
     'ALT': 'RedHat',
     'Trisquel': 'Debian',
     'GCEL': 'Debian',
@@ -1388,6 +1390,12 @@ def os_data():
         grains['osfinger'] = '{os}-{ver}'.format(
             os=grains['os'],
             ver=grains['osrelease'])
+    elif grains.get('os') in 'MacOS':
+        grains['osmajorrelease'] = grains['osrelease'].split('.', 1)[0]
+
+        grains['osfinger'] = '{os}-{ver}'.format(
+            os=grains['os'],
+            ver=grains['osrelease'].rsplit('.', 1)[0])
 
     if grains.get('osrelease', ''):
         osrelease_info = grains['osrelease'].split('.')
@@ -1606,6 +1614,57 @@ def hwaddr_interfaces():
     return {'hwaddr_interfaces': ret}
 
 
+def dns():
+    '''
+    Parse the resolver configuration file
+
+     .. versionadded:: Boron
+    '''
+
+    if salt.utils.is_windows() or 'proxyminion' in __opts__:
+        return {}
+
+    ns4 = []
+    ns6 = []
+    search = []
+    domain = ''
+
+    try:
+        with salt.utils.fopen('/etc/resolv.conf') as f:
+            for line in f:
+                line = line.strip().split()
+
+                try:
+                    (directive, arg) = (line[0].lower(), line[1:])
+                    if directive == 'nameserver':
+                        ip_addr = arg[0]
+                        if (salt.utils.network.is_ipv4(ip_addr) and
+                                ip_addr not in ns4):
+                            ns4.append(ip_addr)
+                        elif (salt.utils.network.is_ipv6(ip_addr) and
+                                ip_addr not in ns6):
+                            ns6.append(ip_addr)
+                    elif directive == 'domain':
+                        domain = arg[0]
+                    elif directive == 'search':
+                        search = list(itertools.takewhile(
+                            lambda x: x[0] not in ('#', ';'), arg))
+                except (IndexError, RuntimeError):
+                    continue
+
+        ret = {
+            'nameservers': ns4 + ns6,
+            'ip4_nameservers': ns4,
+            'ip6_nameservers': ns6,
+            'domain': domain,
+            'search': search
+        }
+
+        return {'dns': ret}
+    except IOError:
+        return {}
+
+
 def get_machine_id():
     '''
     Provide the machine-id
@@ -1738,7 +1797,7 @@ def _hw_data(osdata):
         for serial in ('system-serial-number', 'chassis-serial-number', 'baseboard-serial-number'):
             serial = __salt__['smbios.get'](serial)
             if serial is not None:
-                grains['serial'] = serial
+                grains['serialnumber'] = serial
                 break
     elif osdata['kernel'] == 'FreeBSD':
         # On FreeBSD /bin/kenv (already in base system)

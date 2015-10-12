@@ -816,6 +816,16 @@ def symlink(
         user = __opts__['user']
 
     if salt.utils.is_windows():
+
+        # Make sure the user exists in Windows
+        # Salt default is 'root'
+        if not __salt__['user.info'](user):
+            # User not found, use the account salt is running under
+            # If username not found, use System
+            user = __salt__['user.current']()
+            if not user:
+                user = 'SYSTEM'
+
         if group is not None:
             log.warning(
                 'The group argument for {0} has been ignored as this '
@@ -1330,7 +1340,7 @@ def managed(name,
 
     # If no source is specified, set replace to False, as there is nothing
     # to replace the file with.
-    src_defined = source or contents or contents_pillar or contents_grains
+    src_defined = source or contents is not None or contents_pillar or contents_grains
     if not src_defined and replace:
         replace = False
         log.warning(
@@ -1346,8 +1356,12 @@ def managed(name,
 
     if contents_pillar:
         contents = __salt__['pillar.get'](contents_pillar)
+        if not contents:
+            return _error(ret, 'contents_pillar {0} results in empty contents'.format(contents_pillar))
     if contents_grains:
         contents = __salt__['grains.get'](contents_grains)
+        if not contents:
+            return _error(ret, 'contents_grain {0} results in empty contents'.format(contents_grains))
 
     # ensure contents is a string
     if contents:
@@ -1454,6 +1468,8 @@ def managed(name,
                 ret['comment'] = 'The file {0} is set to be changed'.format(name)
                 if show_diff and 'diff' in ret['pchanges']:
                     ret['changes']['diff'] = ret['pchanges']['diff']
+                if not show_diff:
+                    ret['changes']['diff'] = '<show_diff=False>'
             else:
                 ret['result'] = True
                 ret['comment'] = 'The file {0} is in the correct state'.format(name)
@@ -2497,7 +2513,9 @@ def replace(name,
         The replacement text.
 
     count
-        Maximum number of pattern occurrences to be replaced.
+        Maximum number of pattern occurrences to be replaced.  Defaults to 0.
+        If count is a positive integer n, no more than n occurrences will be
+        replaced, otherwise all occurrences will be replaced.
 
     flags
         A list of flags defined in the :ref:`re module documentation <contents-of-module-re>`.
@@ -3278,11 +3296,9 @@ def append(name,
             if not check_res:
                 return _error(ret, check_msg)
 
-        # Make sure that we have a file
-        __salt__['file.touch'](name)
-
     check_res, check_msg = _check_file(name)
     if not check_res:
+        # Try to create the file
         touch(name, makedirs=makedirs)
         retry_res, retry_msg = _check_file(name)
         if not retry_res:
@@ -3452,12 +3468,13 @@ def prepend(name,
             if not check_res:
                 return _error(ret, check_msg)
 
-        # Make sure that we have a file
-        __salt__['file.touch'](name)
-
     check_res, check_msg = _check_file(name)
     if not check_res:
-        return _error(ret, check_msg)
+        # Try to create the file
+        touch(name, makedirs=makedirs)
+        retry_res, retry_msg = _check_file(name)
+        if not retry_res:
+            return _error(ret, check_msg)
 
     # Follow the original logic and re-assign 'text' if using source(s)...
     if sl_:
@@ -3866,11 +3883,16 @@ def copy(
                 )
 
     if __opts__['test']:
-        ret['comment'] = 'File "{0}" is set to be copied to "{1}"'.format(
-            source,
-            name
-        )
-        ret['result'] = None
+        if changed:
+            ret['comment'] = 'File "{0}" is set to be copied to "{1}"'.format(
+                source,
+                name
+            )
+            ret['result'] = None
+        else:
+            ret['comment'] = ('The target file "{0}" exists and will not be '
+                              'overwritten'.format(name))
+            ret['result'] = True
         return ret
 
     if not changed:

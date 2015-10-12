@@ -465,15 +465,22 @@ class BaseSaltAPIHandler(tornado.web.RequestHandler, SaltClientsMixIn):  # pylin
         Run before get/posts etc. Pre-flight checks:
             - verify that we can speak back to them (compatible accept header)
         '''
-        # verify the content type
-        found = False
-        for content_type, dumper in self.ct_out_map:
-            if fnmatch.fnmatch(content_type, self.request.headers.get('Accept', '*/*')):
-                found = True
-                break
+        # Find an acceptable content-type
+        accept_header = self.request.headers.get('Accept', '*/*')
+        # Ignore any parameter, including q (quality) one
+        parsed_accept_header = [cgi.parse_header(h)[0] for h in accept_header.split(',')]
+
+        def find_acceptable_content_type(parsed_accept_header):
+            for media_range in parsed_accept_header:
+                for content_type, dumper in self.ct_out_map:
+                    if fnmatch.fnmatch(content_type, media_range):
+                        return content_type, dumper
+            return None, None
+
+        content_type, dumper = find_acceptable_content_type(parsed_accept_header)
 
         # better return message?
-        if not found:
+        if not content_type:
             self.send_error(406)
 
         self.content_type = content_type
@@ -585,7 +592,13 @@ class BaseSaltAPIHandler(tornado.web.RequestHandler, SaltClientsMixIn):  # pylin
         Return CORS headers for preflight requests
         '''
         # Allow X-Auth-Token in requests
-        self.set_header('Access-Control-Allow-Headers', 'X-Auth-Token')
+        request_headers = self.request.headers.get('Access-Control-Request-Headers')
+        allowed_headers = request_headers.split(',')
+
+        # Filter allowed header here if needed.
+
+        # Allow request headers
+        self.set_header('Access-Control-Allow-Headers', ','.join(allowed_headers))
 
         # Allow X-Auth-Token in responses
         self.set_header('Access-Control-Expose-Headers', 'X-Auth-Token')
@@ -706,12 +719,18 @@ class SaltAuthHandler(BaseSaltAPIHandler):  # pylint: disable=W0223
             }}
         '''
         try:
-            creds = {'username': self.get_arguments('username')[0],
-                     'password': self.get_arguments('password')[0],
-                     'eauth': self.get_arguments('eauth')[0],
+            request_payload = self.deserialize(self.request.body)
+
+            if not isinstance(request_payload, dict):
+                self.send_error(400)
+                return
+
+            creds = {'username': request_payload['username'],
+                     'password': request_payload['password'],
+                     'eauth': request_payload['eauth'],
                      }
         # if any of the args are missing, its a bad request
-        except IndexError:
+        except KeyError:
             self.send_error(400)
             return
 

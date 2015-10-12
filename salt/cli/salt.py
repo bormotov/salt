@@ -10,6 +10,7 @@ import salt.utils.job
 from salt.ext.six import string_types
 from salt.utils import parsers, print_cli
 from salt.utils.args import yamlify_arg
+from salt.utils.verify import verify_log
 from salt.exceptions import (
         SaltClientError,
         SaltInvocationError,
@@ -35,6 +36,7 @@ class SaltCMD(parsers.SaltCMDOptionParser):
 
         # Setup file logging!
         self.setup_logfile_logger()
+        verify_log(self.config)
 
         try:
             # We don't need to bail on config file permission errors
@@ -82,6 +84,10 @@ class SaltCMD(parsers.SaltCMDOptionParser):
 
             if getattr(self.options, 'return_config'):
                 kwargs['ret_config'] = getattr(self.options, 'return_config')
+
+            if getattr(self.options, 'return_kwargs'):
+                kwargs['ret_kwargs'] = yamlify_arg(
+                        getattr(self.options, 'return_kwargs'))
 
             if getattr(self.options, 'module_executors'):
                 kwargs['module_executors'] = yamlify_arg(getattr(self.options, 'module_executors'))
@@ -255,9 +261,9 @@ class SaltCMD(parsers.SaltCMDOptionParser):
                     isinstance(minion_ret, string_types)
                     and minion_ret.startswith("Minion did not return")
                     ):
-                if "Not connected" in ret[each_minion]:
+                if "Not connected" in minion_ret:
                     not_connected_minions.append(each_minion)
-                elif "No response" in ret[each_minion]:
+                elif "No response" in minion_ret:
                     not_response_minions.append(each_minion)
                 not_return_counter += 1
                 not_return_minions.append(each_minion)

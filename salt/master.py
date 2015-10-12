@@ -600,14 +600,21 @@ class ReqServer(object):
         self.process_manager = salt.utils.process.ProcessManager(name='ReqServer_ProcessManager')
 
         req_channels = []
+        tcp_only = True
         for transport, opts in iter_transport_opts(self.opts):
             chan = salt.transport.server.ReqServerChannel.factory(opts)
             chan.pre_fork(self.process_manager)
             req_channels.append(chan)
+            if transport != 'tcp':
+                tcp_only = False
 
         kwargs = {}
         if salt.utils.is_windows():
             kwargs['log_queue'] = self.log_queue
+            # Use one worker thread if the only TCP transport is set up on Windows. See #27188.
+            if tcp_only:
+                log.warning("TCP transport is currently supporting the only 1 worker on Windows.")
+                self.opts['worker_threads'] = 1
 
         for ind in range(int(self.opts['worker_threads'])):
             self.process_manager.add_process(MWorker,
@@ -1213,8 +1220,11 @@ class AESFuncs(object):
 
         :param dict load: The minion payload
         '''
-        salt.utils.job.store_job(
-            self.opts, load, event=self.event, mminion=self.mminion)
+        try:
+            salt.utils.job.store_job(
+                self.opts, load, event=self.event, mminion=self.mminion)
+        except salt.exceptions.SaltCacheError:
+            log.error('Could not store job information for load: {0}'.format(load))
 
     def _syndic_return(self, load):
         '''
@@ -1804,10 +1814,11 @@ class ClearFuncs(object):
             # If there are groups in the token, check if any of them are listed in the eauth config
             group_auth_match = False
             try:
-                for group in token['groups']:
-                    if group in eauth_groups:
-                        group_auth_match = True
-                        break
+                if token.get('groups'):
+                    for group in token['groups']:
+                        if group in eauth_groups:
+                            group_auth_match = True
+                            break
             except KeyError:
                 pass
             if '*' not in eauth_users and token['name'] not in eauth_users and not group_auth_match:
@@ -2174,6 +2185,9 @@ class ClearFuncs(object):
 
             if 'module_executors' in clear_load['kwargs']:
                 load['module_executors'] = clear_load['kwargs'].get('module_executors')
+
+            if 'ret_kwargs' in clear_load['kwargs']:
+                load['ret_kwargs'] = clear_load['kwargs'].get('ret_kwargs')
 
         if 'user' in clear_load:
             log.info(

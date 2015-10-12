@@ -71,7 +71,6 @@ To use the EC2 cloud module, set up the cloud configuration at
 from __future__ import absolute_import
 import os
 import sys
-import stat
 import time
 import uuid
 import pprint
@@ -195,27 +194,10 @@ def __virtual__():
             continue
 
         parameters = details['ec2']
-
-        if not os.path.exists(parameters['private_key']):
-            raise SaltCloudException(
-                'The EC2 key file \'{0}\' used in the \'{1}\' provider '
-                'configuration does not exist\n'.format(
-                    parameters['private_key'],
-                    provider
-                )
-            )
-
-        key_mode = str(
-            oct(stat.S_IMODE(os.stat(parameters['private_key']).st_mode))
-        )
-        if key_mode not in ('0400', '0600'):
-            raise SaltCloudException(
-                'The EC2 key file \'{0}\' used in the \'{1}\' provider '
-                'configuration needs to be set to mode 0400 or 0600\n'.format(
-                    parameters['private_key'],
-                    provider
-                )
-            )
+        if salt.utils.cloud.check_key_path_and_mode(
+                provider, parameters['private_key']
+        ) is False:
+            return False
 
     return __virtualname__
 
@@ -1182,7 +1164,7 @@ def _create_eni_if_necessary(interface):
                         break
             else:
                 for subnet in subnet_query_result['item']:
-                    if subnet['subnetId'] == interface['SubnetId']:
+                    if 'subnetId' in subnet and subnet['subnetId'] == interface['SubnetId']:
                         found = True
                         break
 
@@ -1299,7 +1281,13 @@ def _modify_eni_properties(eni_id, properties=None):
     while retries > 0:
         retries = retries - 1
 
-        result = query(params, return_root=True)
+        result = aws.query(params,
+                           return_root=True,
+                           location=get_location(),
+                           provider=get_provider(),
+                           opts=__opts__,
+                           sigver='4')
+
         if isinstance(result, dict) and result.get('error'):
             time.sleep(1)
             continue
@@ -2060,13 +2048,19 @@ def wait_for_instance(
                     },
                     call='action',
                 )
-                log.debug(password_data)
                 win_passwd = password_data.get('password', None)
                 if win_passwd is None:
+                    log.debug(password_data)
                     # This wait is so high, because the password is unlikely to
                     # be generated for at least 4 minutes
                     time.sleep(60)
                 else:
+                    logging_data = password_data
+
+                    logging_data['password'] = 'XXX-REDACTED-XXX'
+                    logging_data['passwordData'] = 'XXX-REDACTED-XXX'
+                    log.debug(logging_data)
+
                     vm_['win_password'] = win_passwd
                     break
 
@@ -3025,6 +3019,11 @@ def list_nodes_full(location=None, call=None):
             get_location(vm_) for vm_ in six.itervalues(__opts__['profiles'])
             if _vm_provider_driver(vm_)
         )
+        # If there aren't any profiles defined for EC2, check
+        # the provider config file, or use the default location.
+        if not locations:
+            locations = [get_location()]
+
         for loc in locations:
             ret.update(_list_nodes_full(loc))
         return ret
@@ -3071,6 +3070,7 @@ def _extract_instance_info(instances):
             for item in instance['instancesSet']['item']:
                 name = _extract_name_tag(item)
                 ret[name] = item
+                ret[name]['name'] = name
                 ret[name].update(
                     dict(
                         id=item['instanceId'],
@@ -3085,6 +3085,7 @@ def _extract_instance_info(instances):
             item = instance['instancesSet']['item']
             name = _extract_name_tag(item)
             ret[name] = item
+            ret[name]['name'] = name
             ret[name].update(
                 dict(
                     id=item['instanceId'],
@@ -3188,6 +3189,7 @@ def list_nodes(call=None):
         ret[node] = {
             'id': nodes[node]['id'],
             'image': nodes[node]['image'],
+            'name': nodes[node]['name'],
             'size': nodes[node]['size'],
             'state': nodes[node]['state'],
             'private_ips': nodes[node]['private_ips'],
@@ -3918,15 +3920,17 @@ def create_snapshot(kwargs=None, call=None, wait_to_finish=False):
     for d in data:
         for k, v in six.iteritems(d):
             r_data[k] = v
-    snapshot_id = r_data['snapshotId']
 
-    # Waits till volume is available
-    if wait_to_finish:
-        salt.utils.cloud.run_func_until_ret_arg(fun=describe_snapshots,
-                                                kwargs={'snapshot_id': snapshot_id},
-                                                fun_call=call,
-                                                argument_being_watched='status',
-                                                required_argument_response='completed')
+    if 'snapshotId' in r_data:
+        snapshot_id = r_data['snapshotId']
+
+        # Waits till volume is available
+        if wait_to_finish:
+            salt.utils.cloud.run_func_until_ret_arg(fun=describe_snapshots,
+                                                    kwargs={'snapshot_id': snapshot_id},
+                                                    fun_call=call,
+                                                    argument_being_watched='status',
+                                                    required_argument_response='completed')
 
     return r_data
 

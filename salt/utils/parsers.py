@@ -137,12 +137,11 @@ class OptionParser(optparse.OptionParser, object):
         if self.epilog:
             kwargs.setdefault('epilog', self.epilog)
 
+        kwargs.setdefault('option_class', CustomOption)
         optparse.OptionParser.__init__(self, *args, **kwargs)
 
         if self.epilog and '%prog' in self.epilog:
             self.epilog = self.epilog.replace('%prog', self.get_prog_name())
-
-    option_class = CustomOption
 
     def add_option_group(self, *args, **kwargs):
         option_group = optparse.OptionParser.add_option_group(self, *args, **kwargs)
@@ -1749,6 +1748,12 @@ class SaltCMDOptionParser(six.with_metaclass(OptionParserMeta,
                   'send the return data from the command back to the master, '
                   'but the return data can be redirected into any number of '
                   'systems, databases or applications.')
+        )
+        self.add_option(
+            '--return_kwargs',
+            default={},
+            metavar='RETURNER_KWARGS',
+            help=('Set any returner options at the command line.')
         )
         self.add_option(
             '--module-executors',

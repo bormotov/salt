@@ -16,7 +16,8 @@ import logging
 import threading
 import traceback
 import multiprocessing
-from random import shuffle
+from random import randint, shuffle
+from salt.config import DEFAULT_MINION_OPTS
 from stat import S_IMODE
 
 # Import Salt Libs
@@ -91,6 +92,7 @@ import salt.defaults.exitcodes
 import salt.cli.daemons
 
 from salt.defaults import DEFAULT_TARGET_DELIM
+from salt.executors import FUNCTION_EXECUTORS
 from salt.utils.debug import enable_sigusr1_handler
 from salt.utils.event import tagify
 from salt.exceptions import (
@@ -603,6 +605,7 @@ class MultiMinion(MinionBase):
         self.auth_wait = self.opts['acceptance_wait_time']
         self.max_auth_wait = self.opts['acceptance_wait_time_max']
 
+        zmq.eventloop.ioloop.install()
         self.io_loop = zmq.eventloop.ioloop.ZMQIOLoop()
 
     def _spawn_minions(self):
@@ -681,9 +684,11 @@ class Minion(MinionBase):
         self.win_proc = []
         self.loaded_base_name = loaded_base_name
 
-        self.io_loop = io_loop or zmq.eventloop.ioloop.ZMQIOLoop()
-        if not self.io_loop.initialized():
-            self.io_loop.install()
+        if io_loop is None:
+            zmq.eventloop.ioloop.install()
+            self.io_loop = zmq.eventloop.ioloop.ZMQIOLoop()
+        else:
+            self.io_loop = io_loop
 
         # Warn if ZMQ < 3.2
         if HAS_ZMQ:
@@ -792,6 +797,30 @@ class Minion(MinionBase):
 
         self.grains_cache = self.opts['grains']
 
+    def _return_retry_timer(self):
+        '''
+        Based on the minion configuration, either return a randomized timer or
+        just return the value of the return_retry_timer.
+        '''
+        msg = 'Minion return retry timer set to {0} seconds'
+        if self.opts.get('return_retry_random'):
+            try:
+                random_retry = randint(1, self.opts['return_retry_timer'])
+            except ValueError:
+                # Catch wiseguys using negative integers here
+                log.error(
+                    'Invalid value ({0}) for return_retry_timer, must be a '
+                    'positive integer'.format(self.opts['return_retry_timer'])
+                )
+                log.debug(msg.format(DEFAULT_MINION_OPTS['return_retry_timer']))
+                return DEFAULT_MINION_OPTS['return_retry_timer']
+            else:
+                log.debug(msg.format(random_retry) + ' (randomized)')
+                return random_retry
+        else:
+            log.debug(msg.format(self.opts.get('return_retry_timer')))
+            return self.opts.get('return_retry_timer')
+
     def _prep_mod_opts(self):
         '''
         Returns a copy of the opts with key bits stripped out
@@ -869,7 +898,7 @@ class Minion(MinionBase):
         if modules_max_memory is True:
             resource.setrlimit(resource.RLIMIT_AS, old_mem_limit)
 
-        executors = salt.loader.executors(self.opts)
+        executors = salt.loader.executors(self.opts, functions)
 
         return functions, returners, errors, executors
 
@@ -957,6 +986,13 @@ class Minion(MinionBase):
         '''
         # this seems awkward at first, but it's a workaround for Windows
         # multiprocessing communication.
+        if sys.platform.startswith('win') and \
+                opts['multiprocessing'] and \
+                not salt.log.is_logging_configured():
+            # We have to re-init the logging system for Windows
+            salt.log.setup_console_logger(log_level=opts.get('log_level', 'info'))
+            if opts.get('log_file'):
+                salt.log.setup_logfile_logger(opts['log_file'], opts.get('log_level_logfile', 'info'))
         if not minion_instance:
             minion_instance = cls(opts)
             if not hasattr(minion_instance, 'functions'):
@@ -1003,14 +1039,24 @@ class Minion(MinionBase):
                 elif not isinstance(executors, list) or not executors:
                     raise SaltInvocationError("Wrong executors specification: {0}. String or non-empty list expected".
                         format(executors))
-                if opts.get('sudo_user', ''):
-                    executors[-1] = 'sudo.get'
+                if opts.get('sudo_user', '') and executors[-1] != 'sudo.get':
+                    if executors[-1] in FUNCTION_EXECUTORS:
+                        executors[-1] = 'sudo.get'  # replace
+                    else:
+                        executors.append('sudo.get')  # append
+                log.trace("Executors list {0}".format(executors))
+
+                # Get executors
+                def get_executor(name):
+                    executor_class = minion_instance.executors.get(name)
+                    if executor_class is None:
+                        raise SaltInvocationError("Executor '{0}' is not available".format(name))
+                    return executor_class
                 # Get the last one that is function executor
-                executor = minion_instance.executors[
-                    "{0}".format(executors.pop())](opts, data, func, args, kwargs)
+                executor = get_executor(executors.pop())(opts, data, func, args, kwargs)
                 # Instantiate others from bottom to the top
                 for executor_name in reversed(executors):
-                    executor = minion_instance.executors["{0}".format(executor_name)](opts, data, executor)
+                    executor = get_executor(executor_name)(opts, data, executor)
                 return_data = executor.execute()
 
                 if isinstance(return_data, types.GeneratorType):
@@ -1096,10 +1142,15 @@ class Minion(MinionBase):
                 ret['metadata'] = data['metadata']
             else:
                 log.warning('The metadata parameter must be a dictionary.  Ignoring.')
-        minion_instance._return_pub(ret)
+        minion_instance._return_pub(
+            ret,
+            timeout=minion_instance._return_retry_timer()
+        )
         if data['ret']:
             if 'ret_config' in data:
                 ret['ret_config'] = data['ret_config']
+            if 'ret_kwargs' in data:
+                ret['ret_kwargs'] = data['ret_kwargs']
             ret['id'] = opts['id']
             for returner in set(data['ret'].split(',')):
                 try:
@@ -1153,10 +1204,15 @@ class Minion(MinionBase):
             ret['fun_args'] = data['arg']
         if 'metadata' in data:
             ret['metadata'] = data['metadata']
-        minion_instance._return_pub(ret)
+        minion_instance._return_pub(
+            ret,
+            timeout=minion_instance._return_retry_timer()
+        )
         if data['ret']:
             if 'ret_config' in data:
                 ret['ret_config'] = data['ret_config']
+            if 'ret_kwargs' in data:
+                ret['ret_kwargs'] = data['ret_kwargs']
             for returner in set(data['ret'].split(',')):
                 ret['id'] = opts['id']
                 try:
@@ -1915,7 +1971,9 @@ class Syndic(Minion):
                               pretag=tagify(self.opts['id'], base='syndic'),
                               )
         for jid in self.jids:
-            self._return_pub(self.jids[jid], '_syndic_return')
+            self._return_pub(self.jids[jid],
+                             '_syndic_return',
+                             timeout=self._return_retry_timer())
         self._reset_event_aggregation()
 
     def destroy(self):
@@ -1971,10 +2029,10 @@ class MultiSyndic(MinionBase):
         self.jid_forward_cache = set()
 
         if io_loop is None:
+            zmq.eventloop.ioloop.install()
             self.io_loop = zmq.eventloop.ioloop.ZMQIOLoop()
         else:
             self.io_loop = io_loop
-        self.io_loop.install()
 
     def _spawn_syndics(self):
         '''
@@ -2494,9 +2552,18 @@ class ProxyMinion(Minion):
 
         self.opts['proxymodule'] = salt.loader.proxy(self.opts, None, loaded_base_name=fq_proxyname)
         self.functions, self.returners, self.function_errors, self.executors = self._load_modules()
-        proxy_fn = self.opts['proxymodule'].loaded_base_name + '.init'
-        self.opts['proxymodule'][proxy_fn](self.opts)
 
+        if ('{0}.init'.format(fq_proxyname) not in self.opts['proxymodule']
+            or '{0}.shutdown'.format(fq_proxyname) not in self.opts['proxymodule']):
+            log.error('Proxymodule {0} is missing an init() or a shutdown() or both.'.format(fq_proxyname))
+            log.error('Check your proxymodule.  Salt-proxy aborted.')
+            self._running = False
+            raise SaltSystemExit(code=-1)
+
+        proxy_fn = self.opts['proxymodule'].loaded_base_name + '.init'
+
+        self.opts['proxymodule'][proxy_fn](self.opts)
+        # reload ?!?
         self.serial = salt.payload.Serial(self.opts)
         self.mod_opts = self._prep_mod_opts()
         self.matcher = Matcher(self.opts, self.functions)

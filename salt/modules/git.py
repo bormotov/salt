@@ -80,11 +80,14 @@ def _config_getter(get_opt,
 
 
 def _expand_path(cwd, user):
+    '''
+    Expand home directory
+    '''
     try:
         to_expand = '~' + user if user else '~'
     except TypeError:
         # Users should never be numeric but if we don't account for this then
-        # we're going to get a traceback
+        # we're going to get a traceback if someone passes this invalid input.
         to_expand = '~' + str(user) if user else '~'
     try:
         return os.path.join(os.path.expanduser(to_expand), cwd)
@@ -145,6 +148,17 @@ def _git_run(command, cwd=None, runas=None, identity=None,
 
         # try each of the identities, independently
         for id_file in identity:
+            if 'salt://' in id_file:
+                _id_file = id_file
+                id_file = __salt__['cp.cache_file'](id_file)
+                if not id_file:
+                    log.error('identity {0} does not exist.'.format(_id_file))
+                    continue
+            else:
+                if not __salt__['file.file_exists'](id_file):
+                    log.error('identity {0} does not exist.'.format(id_file))
+                    continue
+
             env = {
                 'GIT_IDENTITY': id_file
             }
@@ -246,6 +260,9 @@ def _get_toplevel(path, user=None):
 
 
 def _git_config(cwd, user):
+    '''
+    Helper to retrive git config options
+    '''
     contextkey = 'git.config.' + cwd
     if contextkey not in __context__:
         git_dir = rev_parse(cwd,
@@ -658,6 +675,10 @@ def clone(cwd,
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
 
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
+
     https_user
         Set HTTP Basic Auth username. Only accepted for HTTPS URLs.
 
@@ -885,7 +906,7 @@ def config_get_regexp(key,
                       ignore_retcode=False,
                       **kwargs):
     r'''
-    .. versionaded:: 2015.8.0
+    .. versionadded:: 2015.8.0
 
     Get the value of a key or keys in the git configuration file using regexes
     for more flexible matching. The return data is a dictionary mapping keys to
@@ -958,7 +979,6 @@ config_get_regex = config_get_regexp
 
 def config_set(key,
                value=None,
-               add=False,
                multivar=None,
                cwd=None,
                user=None,
@@ -1029,6 +1049,7 @@ def config_set(key,
         salt myminion git.config_set user.email foo@bar.com global=True
     '''
     kwargs = salt.utils.clean_kwargs(**kwargs)
+    add_ = kwargs.pop('add', False)
     global_ = kwargs.pop('global', False)
     is_global = kwargs.pop('is_global', False)
     if kwargs:
@@ -1080,7 +1101,7 @@ def config_set(key,
 
     if value is not None:
         command = copy.copy(command_prefix)
-        if add:
+        if add_:
             command.append('--add')
         else:
             command.append('--replace-all')
@@ -1345,6 +1366,10 @@ def fetch(cwd,
             remote side in the ``authorized_keys`` file.
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
+
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
 
     ignore_retcode : False
         If ``True``, do not log an error to the minion log if the git command
@@ -1769,6 +1794,10 @@ def ls_remote(cwd=None,
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
 
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
+
     https_user
         Set HTTP Basic Auth username. Only accepted for HTTPS URLs.
 
@@ -1830,8 +1859,8 @@ def merge(cwd,
           rev=None,
           opts='',
           user=None,
-          branch=None,
-          ignore_retcode=False):
+          ignore_retcode=False,
+          **kwargs):
     '''
     Interface to `git-merge(1)`_
 
@@ -1883,14 +1912,19 @@ def merge(cwd,
         # .. or merge another rev
         salt myminion git.merge /path/to/repo rev=upstream/foo
     '''
+    kwargs = salt.utils.clean_kwargs(**kwargs)
+    branch_ = kwargs.pop('branch', None)
+    if kwargs:
+        salt.utils.invalid_kwargs(kwargs)
+
     cwd = _expand_path(cwd, user)
-    if branch:
+    if branch_:
         salt.utils.warn_until(
             'Nitrogen',
             'The \'branch\' argument to git.merge has been deprecated, please '
             'use \'rev\' instead.'
         )
-        rev = branch
+        rev = branch_
     command = ['git', 'merge']
     command.extend(_format_opts(opts))
     if rev:
@@ -2170,6 +2204,10 @@ def pull(cwd, opts='', user=None, identity=None, ignore_retcode=False):
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
 
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
+
     ignore_retcode : False
         If ``True``, do not log an error to the minion log if the git command
         returns a nonzero exit status.
@@ -2201,7 +2239,7 @@ def push(cwd,
          user=None,
          identity=None,
          ignore_retcode=False,
-         branch=None):
+         **kwargs):
     '''
     Interface to `git-push(1)`_
 
@@ -2250,6 +2288,10 @@ def push(cwd,
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
 
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
+
     ignore_retcode : False
         If ``True``, do not log an error to the minion log if the git command
         returns a nonzero exit status.
@@ -2270,14 +2312,19 @@ def push(cwd,
         # Delete remote branch 'upstream/temp'
         salt myminion git.push /path/to/repo upstream :temp
     '''
+    kwargs = salt.utils.clean_kwargs(**kwargs)
+    branch_ = kwargs.pop('branch', None)
+    if kwargs:
+        salt.utils.invalid_kwargs(kwargs)
+
     cwd = _expand_path(cwd, user)
-    if branch:
+    if branch_:
         salt.utils.warn_until(
             'Nitrogen',
             'The \'branch\' argument to git.push has been deprecated, please '
             'use \'ref\' instead.'
         )
-        ref = branch
+        ref = branch_
     command = ['git', 'push']
     command.extend(_format_opts(opts))
     if not isinstance(remote, six.string_types):
@@ -2393,7 +2440,8 @@ def remote_get(cwd,
     cwd = _expand_path(cwd, user)
     all_remotes = remotes(cwd,
                           user=user,
-                          redact_auth=redact_auth)
+                          redact_auth=redact_auth,
+                          ignore_retcode=ignore_retcode)
     if remote not in all_remotes:
         raise CommandExecutionError(
             'Remote \'{0}\' not present in git checkout located at {1}'
@@ -2439,6 +2487,10 @@ def remote_refs(url,
             remote side in the ``authorized_keys`` file.
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
+
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
 
     https_user
         Set HTTP Basic Auth username. Only accepted for HTTPS URLs.
@@ -2959,8 +3011,8 @@ def submodule(cwd,
               opts='',
               user=None,
               identity=None,
-              init=False,
-              ignore_retcode=False):
+              ignore_retcode=False,
+              **kwargs):
     '''
     .. versionchanged:: 2015.8.0
         Added the ``command`` argument to allow for operations other than
@@ -3012,6 +3064,10 @@ def submodule(cwd,
 
             .. _`sshd(8)`: http://www.man7.org/linux/man-pages/man8/sshd.8.html#AUTHORIZED_KEYS_FILE%20FORMAT
 
+        Key can also be specified as a SaltStack file server URL, eg. salt://location/identity_file
+
+        .. versionadded:: Boron
+
     ignore_retcode : False
         If ``True``, do not log an error to the minion log if the git command
         returns a nonzero exit status.
@@ -3038,8 +3094,13 @@ def submodule(cwd,
         # Unregister submodule (2015.8.0 and later)
         salt myminion git.submodule /path/to/repo/sub/repo deinit
     '''
+    kwargs = salt.utils.clean_kwargs(**kwargs)
+    init_ = kwargs.pop('init', False)
+    if kwargs:
+        salt.utils.invalid_kwargs(kwargs)
+
     cwd = _expand_path(cwd, user)
-    if init:
+    if init_:
         raise SaltInvocationError(
             'The \'init\' argument is no longer supported. Either set '
             '\'command\' to \'init\', or include \'--init\' in the \'opts\' '
@@ -3178,14 +3239,14 @@ def version(versioninfo=False):
 
 def worktree_add(cwd,
                  worktree_path,
-                 branch=None,
                  ref=None,
                  reset_branch=None,
                  force=None,
                  detach=False,
                  opts='',
                  user=None,
-                 ignore_retcode=False):
+                 ignore_retcode=False,
+                 **kwargs):
     '''
     .. versionadded:: 2015.8.0
 
@@ -3254,8 +3315,13 @@ def worktree_add(cwd,
         salt myminion git.worktree_add /path/to/repo/main ../hotfix ref=origin/master
         salt myminion git.worktree_add /path/to/repo/main ../hotfix branch=hotfix21 ref=v2.1.9.3
     '''
+    kwargs = salt.utils.clean_kwargs(**kwargs)
+    branch_ = kwargs.pop('branch', None)
+    if kwargs:
+        salt.utils.invalid_kwargs(kwargs)
+
     cwd = _expand_path(cwd, user)
-    if branch and detach:
+    if branch_ and detach:
         raise SaltInvocationError(
             'Only one of \'branch\' and \'detach\' is allowed'
         )
@@ -3269,9 +3335,9 @@ def worktree_add(cwd,
             )
         command.append('--detach')
     else:
-        if not branch:
-            branch = os.path.basename(worktree_path)
-        command.extend(['-B' if reset_branch else '-b', branch])
+        if not branch_:
+            branch_ = os.path.basename(worktree_path)
+        command.extend(['-B' if reset_branch else '-b', branch_])
         if force:
             command.append('--force')
     command.extend(_format_opts(opts))
@@ -3342,6 +3408,7 @@ def worktree_prune(cwd,
         .. versionadded:: 2015.8.0
 
     .. _`git-worktree(1)`: http://git-scm.com/docs/git-worktree
+    .. _`git-config(1)`: http://git-scm.com/docs/git-config/2.5.1
 
 
     CLI Examples:

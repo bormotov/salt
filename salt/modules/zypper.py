@@ -209,15 +209,15 @@ def latest_version(*names, **kwargs):
     package_info = info_available(*names)
     for name in names:
         pkg_info = package_info.get(name)
-        if pkg_info is not None and pkg_info.get('status', '').lower() in ['not installed', 'out-of-date']:
-            ret_data = {}
-            for k in ['version', 'vendor']:
-                ret_data[k] = pkg_info.get(k)
-            ret[name] = ret_data
+        status = pkg_info.get('status', '').lower()
+        if pkg_info is not None and status.startswith('not installed') or status.startswith('out-of-date'):
+            ret[name] = pkg_info.get('version')
+        else:
+            ret[name] = ''
 
     # Return a string if only one package name passed
-    if len(names) == 1:
-        return ret[names[0]]['version']
+    if len(names) == 1 and len(ret):
+        return ret[names[0]]
     return ret
 
 
@@ -558,6 +558,7 @@ def install(name=None,
             pkgs=None,
             sources=None,
             downloadonly=None,
+            skip_verify=False,
             **kwargs):
     '''
     Install the passed package(s), add refresh=True to run 'zypper refresh'
@@ -584,6 +585,9 @@ def install(name=None,
 
     downloadonly
         Only download the packages, do not install.
+
+    skip_verify
+        Skip the GPG verification check (e.g., ``--no-gpg-checks``)
 
     version
         Can be either a version number, or the combination of a comparison
@@ -681,6 +685,8 @@ def install(name=None,
     cmd_install = ['zypper', '--non-interactive']
     if not refresh:
         cmd_install.append('--no-refresh')
+    if skip_verify:
+        cmd_install.append('--no-gpg-checks')
     cmd_install += ['install', '--name', '--auto-agree-with-licenses']
     if downloadonly:
         cmd_install.append('--download-only')
@@ -715,7 +721,7 @@ def install(name=None,
     return salt.utils.compare_dicts(old, new)
 
 
-def upgrade(refresh=True):
+def upgrade(refresh=True, skip_verify=False):
     '''
     Run a full system upgrade, a zypper upgrade
 
@@ -729,6 +735,13 @@ def upgrade(refresh=True):
     .. code-block:: bash
 
         salt '*' pkg.upgrade
+
+
+    Options:
+
+    skip_verify
+        Skip the GPG verification check (e.g., ``--no-gpg-checks``)
+
     '''
     ret = {'changes': {},
            'result': True,
@@ -738,7 +751,10 @@ def upgrade(refresh=True):
     if salt.utils.is_true(refresh):
         refresh_db()
     old = list_pkgs()
-    cmd = 'zypper --non-interactive update --auto-agree-with-licenses'
+    cmd = 'zypper --non-interactive'
+    if skip_verify:
+        cmd += ' --no-gpg-checks'
+    cmd += ' update --auto-agree-with-licenses'
     call = __salt__['cmd.run_all'](cmd, output_loglevel='trace')
     if call['retcode'] != 0:
         ret['result'] = False

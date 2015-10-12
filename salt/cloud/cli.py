@@ -25,7 +25,7 @@ import salt.defaults.exitcodes
 import salt.output
 import salt.utils
 from salt.utils import parsers
-from salt.utils.verify import check_user, verify_env, verify_files
+from salt.utils.verify import check_user, verify_env, verify_files, verify_log
 
 # Import salt.cloud libs
 import salt.cloud
@@ -80,6 +80,7 @@ class SaltCloud(parsers.SaltCloudParser):
 
         # Setup log file logging
         self.setup_logfile_logger()
+        verify_log(self.config)
 
         if self.options.update_bootstrap:
             ret = salt.utils.cloud.update_bootstrap(self.config)
@@ -350,7 +351,11 @@ class SaltCloud(parsers.SaltCloudParser):
 
                 if dmap.get('existing', None):
                     for name in dmap['existing']:
-                        ret[name] = {'Message': 'Already running'}
+                        if 'ec2' in dmap['existing'][name]['provider']:
+                            msg = 'Instance already exists, or is terminated and has the same name.'
+                        else:
+                            msg = 'Already running.'
+                        ret[name] = {'Message': msg}
 
             except (SaltCloudException, Exception) as exc:
                 msg = 'There was a query error: {0}'
