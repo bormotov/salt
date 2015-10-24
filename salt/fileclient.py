@@ -10,6 +10,7 @@ import logging
 import hashlib
 import os
 import shutil
+import ftplib
 
 # Import salt libs
 from salt.exceptions import (
@@ -228,6 +229,7 @@ class Client(object):
         # go through the list of all files finding ones that are in
         # the target directory and caching them
         for fn_ in self.file_list(saltenv):
+            fn_ = salt.utils.locales.sdecode(fn_)
             if fn_.strip() and fn_.startswith(path):
                 if salt.utils.check_include_exclude(
                         fn_, include_pat, exclude_pat):
@@ -571,6 +573,15 @@ class Client(object):
                 return dest
             except Exception:
                 raise MinionError('Could not fetch from {0}'.format(url))
+        if url_data.scheme == 'ftp':
+            try:
+                ftp = ftplib.FTP(url_data.hostname)
+                ftp.login()
+                with salt.utils.fopen(dest, 'wb') as fp_:
+                    ftp.retrbinary('RETR {0}'.format(url_data.path), fp_.write)
+                return dest
+            except Exception as exc:
+                raise MinionError('Could not retrieve {0} from FTP server. Exception: {1}'.format(url, exc))
 
         if url_data.scheme == 'swift':
             try:
@@ -600,19 +611,19 @@ class Client(object):
         try:
             query = salt.utils.http.query(
                 fixed_url,
-                stream=True,
+                text=True,
                 username=url_data.username,
                 password=url_data.password,
                 **get_kwargs
             )
-            if 'handle' not in query:
+            if 'text' not in query:
                 raise MinionError('Error: {0}'.format(query['error']))
             if no_cache:
-                return query['handle'].body
+                return query['text']
             else:
                 dest_tmp = "{0}.part".format(dest)
                 with salt.utils.fopen(dest_tmp, 'wb') as destfp:
-                    destfp.write(query['handle'].body)
+                    destfp.write(query['text'])
                 salt.utils.files.rename(dest_tmp, dest)
                 return dest
         except HTTPError as exc:

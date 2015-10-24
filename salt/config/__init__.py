@@ -60,8 +60,8 @@ else:
     _DFLT_MULTIPROCESSING_MODE = True
 
 FLO_DIR = os.path.join(
-        os.path.dirname(__file__),
-        'daemons', 'flo')
+            os.path.dirname(os.path.dirname(__file__)),
+            'daemons', 'flo')
 
 VALID_OPTS = {
     # The address of the salt master. May be specified as IP address or hostname
@@ -87,7 +87,7 @@ VALID_OPTS = {
     # Selects a random master when starting a minion up in multi-master mode
     'master_shuffle': bool,
 
-    # When in mulit-master mode, temporarily remove a master from the list if a conenction
+    # When in multi-master mode, temporarily remove a master from the list if a conenction
     # is interrupted and try another master in the list.
     'master_alive_interval': int,
 
@@ -240,7 +240,7 @@ VALID_OPTS = {
     # The ipc strategy. (i.e., sockets versus tcp, etc)
     'ipc_mode': str,
 
-    # Enable ipv6 support for deamons
+    # Enable ipv6 support for daemons
     'ipv6': bool,
 
     # The chunk size to use when streaming files with the file server
@@ -388,6 +388,9 @@ VALID_OPTS = {
     # Events matching a tag in this list should never be sent to an event returner.
     'event_return_blacklist': list,
 
+    # default match type for filtering events tags: startswith, endswith, find, regex, fnmatch
+    'event_match_type': str,
+
     # This pidfile to write out to when a deamon starts
     'pidfile': str,
 
@@ -395,7 +398,7 @@ VALID_OPTS = {
     'range_server': str,
 
     # The tcp keepalive interval to set on TCP ports. This setting can be used to tune salt connectivity
-    # issues in messy network environments with misbeahving firewalls
+    # issues in messy network environments with misbehaving firewalls
     'tcp_keepalive': bool,
 
     # Sets zeromq TCP keepalive idle. May be used to tune issues with minion disconnects
@@ -420,6 +423,11 @@ VALID_OPTS = {
     # Set the zeromq high water mark on the publisher interface.
     # http://api.zeromq.org/3-2:zmq-setsockopt
     'pub_hwm': int,
+
+    # ZMQ HWM for SaltEvent pub socket
+    'salt_event_pub_hwm': int,
+    # ZMQ HWM for EventPublisher pub socket
+    'event_publisher_pub_hwm': int,
 
     # The number of MWorker processes for a master to startup. This number needs to scale up as
     # the number of connected minions increases.
@@ -771,7 +779,7 @@ DEFAULT_MINION_OPTS = {
     'user': 'root',
     'root_dir': salt.syspaths.ROOT_DIR,
     'pki_dir': os.path.join(salt.syspaths.CONFIG_DIR, 'pki', 'minion'),
-    'id': None,
+    'id': '',
     'cachedir': os.path.join(salt.syspaths.CACHE_DIR, 'minion'),
     'cache_jobs': False,
     'grains_cache': False,
@@ -952,12 +960,21 @@ DEFAULT_MINION_OPTS = {
     'sudo_user': '',
     'http_request_timeout': 1 * 60 * 60.0,  # 1 hour
     'http_max_body': 100 * 1024 * 1024 * 1024,  # 100GB
+    # ZMQ HWM for SaltEvent pub socket - different for minion vs. master
+    'salt_event_pub_hwm': 2000,
+    # ZMQ HWM for EventPublisher pub socket - different for minion vs. master
+    'event_publisher_pub_hwm': 1000,
+    'event_match_type': 'startswith',
 }
 
 DEFAULT_MASTER_OPTS = {
     'interface': '0.0.0.0',
     'publish_port': '4505',
     'pub_hwm': 1000,
+    # ZMQ HWM for SaltEvent pub socket - different for minion vs. master
+    'salt_event_pub_hwm': 2000,
+    # ZMQ HWM for EventPublisher pub socket - different for minion vs. master
+    'event_publisher_pub_hwm': 1000,
     'auth_mode': 1,
     'user': 'root',
     'worker_threads': 5,
@@ -1097,6 +1114,7 @@ DEFAULT_MASTER_OPTS = {
     'event_return_queue': 0,
     'event_return_whitelist': [],
     'event_return_blacklist': [],
+    'event_match_type': 'startswith',
     'serial': 'msgpack',
     'state_verbose': True,
     'state_output': 'full',
@@ -1190,7 +1208,13 @@ DEFAULT_MASTER_OPTS = {
 DEFAULT_PROXY_MINION_OPTS = {
     'conf_file': os.path.join(salt.syspaths.CONFIG_DIR, 'proxy'),
     'log_file': os.path.join(salt.syspaths.LOGS_DIR, 'proxy'),
-    'add_proxymodule_to_opts': True
+    'add_proxymodule_to_opts': True,
+
+    # Default multiprocessing to False since anything that needs
+    # salt.vt will have trouble with our forking model.
+    # Proxies with non-persistent (mostly REST API) connections
+    # can change this back to True
+    'multiprocessing': False
 }
 
 # ----- Salt Cloud Configuration Defaults ----------------------------------->
@@ -1492,7 +1516,14 @@ def include_config(include, orig_path, verbose):
 
         for fn_ in sorted(glob.glob(path)):
             log.debug('Including configuration from \'{0}\''.format(fn_))
-            salt.utils.dictupdate.update(configuration, _read_conf_file(fn_))
+            opts = _read_conf_file(fn_)
+
+            include = opts.get('include', [])
+            if include:
+                opts.update(include_config(include, fn_, verbose))
+
+            salt.utils.dictupdate.update(configuration, opts)
+
     return configuration
 
 

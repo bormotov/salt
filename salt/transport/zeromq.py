@@ -42,6 +42,7 @@ import tornado.gen
 import tornado.concurrent
 
 # Import third party libs
+import salt.ext.six as six
 from Crypto.Cipher import PKCS1_OAEP
 
 log = logging.getLogger(__name__)
@@ -243,7 +244,7 @@ class AsyncZeroMQPubChannel(salt.transport.mixins.auth.AESPubClientMixin, salt.t
             zmq.eventloop.ioloop.install()
             self.io_loop = tornado.ioloop.IOLoop.current()
 
-        self.hexid = hashlib.sha1(self.opts['id']).hexdigest()
+        self.hexid = hashlib.sha1(six.b(self.opts['id'])).hexdigest()
 
         self.auth = salt.crypt.AsyncAuth(self.opts, io_loop=self.io_loop)
 
@@ -353,6 +354,9 @@ class AsyncZeroMQPubChannel(salt.transport.mixins.auth.AESPubClientMixin, salt.t
             payload = self.serial.loads(messages[0])
         # 2 includes a header which says who should do it
         elif messages_len == 2:
+            if messages[0] not in ('broadcast', self.hexid):
+                log.debug('Publish recieved for not this minion: {0}'.format(messages[0]))
+                raise tornado.gen.Return(None)
             payload = self.serial.loads(messages[1])
         else:
             raise Exception(('Invalid number of messages ({0}) in zeromq pub'
@@ -383,7 +387,8 @@ class AsyncZeroMQPubChannel(salt.transport.mixins.auth.AESPubClientMixin, salt.t
         @tornado.gen.coroutine
         def wrap_callback(messages):
             payload = yield self._decode_messages(messages)
-            callback(payload)
+            if payload is not None:
+                callback(payload)
         return self.stream.on_recv(wrap_callback)
 
 
@@ -793,7 +798,7 @@ class AsyncReqMessageClient(object):
     def _internal_send_recv(self):
         while len(self.send_queue) > 0:
             message = self.send_queue.pop(0)
-            future = self.send_future_map[message]
+            future = self.send_future_map.pop(message)
 
             # send
             def mark_future(msg):

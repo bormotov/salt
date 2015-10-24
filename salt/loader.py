@@ -44,6 +44,20 @@ log = logging.getLogger(__name__)
 SALT_BASE_PATH = os.path.abspath(os.path.dirname(salt.__file__))
 LOADED_BASE_NAME = 'salt.loaded'
 
+if six.PY3:
+    # pylint: disable=no-member,no-name-in-module,import-error
+    import importlib.machinery
+    SUFFIXES = []
+    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+        SUFFIXES.append((suffix, 'rb', 3))
+    for suffix in importlib.machinery.BYTECODE_SUFFIXES:
+        SUFFIXES.append((suffix, 'rb', 2))
+    for suffix in importlib.machinery.SOURCE_SUFFIXES:
+        SUFFIXES.append((suffix, 'r', 1))
+    # pylint: enable=no-member,no-name-in-module,import-error
+else:
+    SUFFIXES = imp.get_suffixes()
+
 # Because on the cloud drivers we do `from salt.cloud.libcloudfuncs import *`
 # which simplifies code readability, it adds some unsupported functions into
 # the driver's module scope.
@@ -60,6 +74,9 @@ LIBCLOUD_FUNCS_NOT_SUPPORTED = (
     'openstack.list_locations',
     'rackspace.list_locations'
 )
+
+# Will be set to pyximport module at runtime if cython is enabled in config.
+pyximport = None
 
 
 def static_loader(
@@ -969,14 +986,15 @@ class LazyLoader(salt.utils.lazy.LazyDict):
         # map of suffix to description for imp
         self.suffix_map = {}
         suffix_order = []  # local list to determine precedence of extensions
-        for (suffix, mode, kind) in imp.get_suffixes():
+        for (suffix, mode, kind) in SUFFIXES:
             self.suffix_map[suffix] = (suffix, mode, kind)
             suffix_order.append(suffix)
 
         if self.opts.get('cython_enable', True) is True:
             try:
-                self.pyximport = __import__('pyximport')  # pylint: disable=import-error
-                self.pyximport.install()
+                global pyximport
+                pyximport = __import__('pyximport')  # pylint: disable=import-error
+                pyximport.install()
                 # add to suffix_map so file_mapping will pick it up
                 self.suffix_map['.pyx'] = tuple()
             except ImportError:
@@ -1034,7 +1052,8 @@ class LazyLoader(salt.utils.lazy.LazyDict):
                     # if we do, we want it if we have a higher precidence ext
                     else:
                         curr_ext = self.file_mapping[f_noext][1]
-                        if suffix_order.index(ext) < suffix_order.index(curr_ext):
+                        #log.debug("****** curr_ext={0} ext={1} suffix_order={2}".format(curr_ext, ext, suffix_order))
+                        if curr_ext and suffix_order.index(ext) < suffix_order.index(curr_ext):
                             self.file_mapping[f_noext] = (fpath, ext)
                 except OSError:
                     continue
@@ -1114,7 +1133,7 @@ class LazyLoader(salt.utils.lazy.LazyDict):
         try:
             sys.path.append(os.path.dirname(fpath))
             if suffix == '.pyx':
-                mod = self.pyximport.load_module(name, fpath, tempfile.gettempdir())
+                mod = pyximport.load_module(name, fpath, tempfile.gettempdir())
             elif suffix == '.o':
                 top_mod = __import__(fpath, globals(), locals(), [])
                 comps = fpath.split('.')
