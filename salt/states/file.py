@@ -278,7 +278,7 @@ def _load_accumulators():
         serial = salt.payload.Serial(__opts__)
         ret = {'accumulators': {}, 'accumulators_deps': {}}
         try:
-            with open(path, 'rb') as f:
+            with salt.utils.fopen(path, 'rb') as f:
                 loaded = serial.load(f)
                 return loaded if loaded else ret
         except (IOError, NameError):
@@ -296,7 +296,7 @@ def _persist_accummulators(accumulators, accumulators_deps):
 
     serial = salt.payload.Serial(__opts__)
     try:
-        with open(_get_accumulator_filepath(), 'w+b') as f:
+        with salt.utils.fopen(_get_accumulator_filepath(), 'w+b') as f:
             serial.dump(accumm_data, f)
     except NameError:
         # msgpack error from salt-ssh
@@ -816,6 +816,16 @@ def symlink(
         user = __opts__['user']
 
     if salt.utils.is_windows():
+
+        # Make sure the user exists in Windows
+        # Salt default is 'root'
+        if not __salt__['user.info'](user):
+            # User not found, use the account salt is running under
+            # If username not found, use System
+            user = __salt__['user.current']()
+            if not user:
+                user = 'SYSTEM'
+
         if group is not None:
             log.warning(
                 'The group argument for {0} has been ignored as this '
@@ -1452,6 +1462,10 @@ def managed(name,
             if ret['pchanges']:
                 ret['result'] = None
                 ret['comment'] = 'The file {0} is set to be changed'.format(name)
+                if show_diff and 'diff' in ret['pchanges']:
+                    ret['changes']['diff'] = ret['pchanges']['diff']
+                if not show_diff:
+                    ret['changes']['diff'] = '<show_diff=False>'
             else:
                 ret['result'] = True
                 ret['comment'] = 'The file {0} is in the correct state'.format(name)
@@ -2547,6 +2561,12 @@ def replace(name,
             # <...snip...>
             - pattern: |
                 CentOS \(2.6.32[^\n]+\n\s+root[^\n]+\n\)+
+
+    .. note::
+
+       When using YAML multiline string syntax in ``pattern:``, make sure to
+       also use that syntax in the ``repl:`` part, or you might loose line
+       feeds.
     '''
     name = os.path.expanduser(name)
 
@@ -3858,11 +3878,16 @@ def copy(
                 )
 
     if __opts__['test']:
-        ret['comment'] = 'File "{0}" is set to be copied to "{1}"'.format(
-            source,
-            name
-        )
-        ret['result'] = None
+        if changed:
+            ret['comment'] = 'File "{0}" is set to be copied to "{1}"'.format(
+                source,
+                name
+            )
+            ret['result'] = None
+        else:
+            ret['comment'] = ('The target file "{0}" exists and will not be '
+                              'overwritten'.format(name))
+            ret['result'] = True
         return ret
 
     if not changed:
@@ -4281,10 +4306,10 @@ def serialize(name,
         if os.path.isfile(name):
             if formatter == 'yaml':
                 with salt.utils.fopen(name, 'r') as fhr:
-                    existing_data = yaml.safe_load(fhr.read())
+                    existing_data = yaml.safe_load(fhr)
             elif formatter == 'json':
                 with salt.utils.fopen(name, 'r') as fhr:
-                    existing_data = json.load(fhr.read())
+                    existing_data = json.load(fhr)
             else:
                 return {'changes': {},
                         'comment': ('{0} format is not supported for merging'
@@ -4604,3 +4629,116 @@ def mod_run_check_cmd(cmd, filename, **check_cmd_opts):
 
     # No reason to stop, return True
     return True
+
+
+def decode(name,
+        encoded_data=None,
+        contents_pillar=None,
+        encoding_type='base64',
+        checksum='md5'):
+    '''
+    Decode an encoded file and write it to disk
+
+    .. versionadded:: Boron
+
+    name
+        Path of the file to be written.
+    encoded_data
+        The encoded file. Either this option or ``contents_pillar`` must be
+        specified.
+    contents_pillar
+        A Pillar path to the encoded file. Uses the same path syntax as
+        :py:func:`pillar.get <salt.modules.pillar.get>`. The
+        :py:func:`hashutil.base64_encodefile
+        <salt.modules.hashutil.base64_encodefile>` function can load encoded
+        content into Pillar. Either this option or ``encoded_data`` must be
+        specified.
+    encoding_type : ``base64``
+        The type of encoding.
+    checksum : ``md5``
+        The hashing algorithm to use to generate checksums. Wraps the
+        :py:func:`hashutil.digest <salt.modules.hashutil.digest>` execution
+        function.
+
+    Usage:
+
+    .. code-block:: yaml
+
+        write_base64_encoded_string_to_a_file:
+          file.decode:
+            - name: /tmp/new_file
+            - encoding_type: base64
+            - contents_pillar: mypillar:thefile
+
+        # or
+
+        write_base64_encoded_string_to_a_file:
+          file.decode:
+            - name: /tmp/new_file
+            - encoding_type: base64
+            - encoded_data: |
+                Z2V0IHNhbHRlZAo=
+
+    Be careful with multi-line strings that the YAML indentation is correct.
+    E.g.,
+
+    .. code-block:: yaml
+
+        write_base64_encoded_string_to_a_file:
+          file.decode:
+            - name: /tmp/new_file
+            - encoding_type: base64
+            - encoded_data: |
+                {{ salt.pillar.get('path:to:data') | indent(8) }}
+    '''
+    ret = {'name': name, 'changes': {}, 'result': False, 'comment': ''}
+
+    if not (encoded_data or contents_pillar):
+        raise CommandExecutionError("Specify either the 'encoded_data' or "
+            "'contents_pillar' argument.")
+    elif encoded_data and contents_pillar:
+        raise CommandExecutionError("Specify only one 'encoded_data' or "
+            "'contents_pillar' argument.")
+    elif encoded_data:
+        content = encoded_data
+    elif contents_pillar:
+        content = __salt__['pillar.get'](contents_pillar, False)
+        if content is False:
+            raise CommandExecutionError('Pillar data not found.')
+    else:
+        raise CommandExecutionError('No contents given.')
+
+    dest_exists = __salt__['file.file_exists'](name)
+    if dest_exists:
+        instr = __salt__['hashutil.base64_decodestring'](content)
+        insum = __salt__['hashutil.digest'](instr, checksum)
+        del instr  # no need to keep in-memory after we have the hash
+        outsum = __salt__['hashutil.digest_file'](name, checksum)
+
+        if insum != outsum:
+            ret['changes'] = {
+                'old': outsum,
+                'new': insum,
+            }
+
+        if not ret['changes']:
+            ret['comment'] = 'File is in the correct state.'
+            ret['result'] = True
+
+            return ret
+
+    if __opts__['test'] is True:
+        ret['comment'] = 'File is set to be updated.'
+        ret['result'] = None
+        return ret
+
+    ret['result'] = __salt__['hashutil.base64_decodefile'](content, name)
+    ret['comment'] = 'File was updated.'
+
+    if not ret['changes']:
+        ret['changes'] = {
+            'old': None,
+            'new': __salt__['hashutil.digest_file'](name, checksum),
+        }
+
+    return ret

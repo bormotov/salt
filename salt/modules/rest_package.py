@@ -19,11 +19,7 @@ def __virtual__():
     '''
     Only work on proxy
     '''
-    # Enable on these platforms only.
-    enable = set((
-        'proxy',
-    ))
-    if __grains__['os'] in enable:
+    if 'proxymodule' in __opts__:
         return __virtualname__
     return False
 
@@ -55,7 +51,7 @@ def version(*names, **kwargs):
         salt '*' pkg.version <package1> <package2> <package3> ...
     '''
     if len(names) == 1:
-        return str(__opts__['proxymodule']['rest_sample.package_status'](names))
+        return str(__opts__['proxymodule']['rest_sample.package_status'](names[0]))
 
 
 def installed(

@@ -351,7 +351,7 @@ class SaltfileMixIn(six.with_metaclass(MixInMeta, object)):
 
         if not os.path.isfile(self.options.saltfile):
             self.error(
-                '{0!r} file does not exist.\n'.format(self.options.saltfile
+                '\'{0}\' file does not exist.\n'.format(self.options.saltfile
                 )
             )
 
@@ -360,7 +360,7 @@ class SaltfileMixIn(six.with_metaclass(MixInMeta, object)):
 
         # Make sure we let the user know that we will be loading a Saltfile
         logging.getLogger(__name__).info(
-            'Loading Saltfile from {0!r}'.format(self.options.saltfile)
+            'Loading Saltfile from \'{0}\''.format(self.options.saltfile)
         )
 
         saltfile_config = config._read_conf_file(saltfile)
@@ -462,7 +462,7 @@ class ConfigDirMixIn(six.with_metaclass(MixInMeta, object)):
         if not os.path.isdir(self.options.config_dir):
             # No logging is configured yet
             sys.stderr.write(
-                'WARNING: CONFIG {0!r} directory does not exist.\n'.format(
+                'WARNING: CONFIG \'{0}\' directory does not exist.\n'.format(
                     self.options.config_dir
                 )
             )
@@ -728,9 +728,9 @@ class LogLevelMixIn(six.with_metaclass(MixInMeta, object)):
                         self._default_logging_logfile_
                     )
                     logging.getLogger(__name__).debug(
-                        'The user {0!r} is not allowed to write to {1!r}. '
+                        'The user \'{0}\' is not allowed to write to \'{1}\'. '
                         'The log file will be stored in '
-                        '\'~/.salt/{2!r}.log\''.format(
+                        '\'~/.salt/\'{2}\'.log\''.format(
                             current_user,
                             logfile,
                             logfile_basename
@@ -843,6 +843,10 @@ class DaemonMixIn(six.with_metaclass(MixInMeta, object)):
             import salt.utils
             salt.utils.daemonize()
 
+    def is_daemonized(self, pid):
+        import salt.utils.process
+        return salt.utils.process.os_is_running(pid)
+
 
 class PidfileMixin(six.with_metaclass(MixInMeta, object)):
     _mixin_prio_ = 40
@@ -859,6 +863,20 @@ class PidfileMixin(six.with_metaclass(MixInMeta, object)):
     def set_pidfile(self):
         from salt.utils.process import set_pidfile
         set_pidfile(self.config['pidfile'], self.config['user'])
+
+    def check_pidfile(self):
+        '''
+        Report whether a pidfile exists
+        '''
+        from salt.utils.process import check_pidfile
+        return check_pidfile(self.config['pidfile'])
+
+    def get_pidfile(self):
+        '''
+        Return a pid contained in a pidfile
+        '''
+        from salt.utils.process import get_pidfile
+        return get_pidfile(self.config['pidfile'])
 
 
 class TargetOptionsMixIn(six.with_metaclass(MixInMeta, object)):
@@ -1037,6 +1055,18 @@ class ArgsStdinMixIn(six.with_metaclass(MixInMeta, object)):
         )
 
 
+class ProxyIdMixIn(six.with_metaclass(MixInMeta, object)):
+    _mixin_prio = 40
+
+    def _mixin_setup(self):
+        self.add_option(
+            '--proxyid',
+            default=None,
+            dest='proxyid',
+            help=('Id for this proxy')
+        )
+
+
 class OutputOptionsMixIn(six.with_metaclass(MixInMeta, object)):
 
     _mixin_prio_ = 40
@@ -1058,7 +1088,7 @@ class OutputOptionsMixIn(six.with_metaclass(MixInMeta, object)):
             '--out', '--output',
             dest='output',
             help=(
-                'Print the output from the {0!r} command using the '
+                'Print the output from the \'{0}\' command using the '
                 'specified outputter. The builtins are {1}.'.format(
                     self.get_prog_name(),
                     ', '.join([repr(k) for k in outputters])
@@ -1106,6 +1136,13 @@ class OutputOptionsMixIn(six.with_metaclass(MixInMeta, object)):
                   'output. One of full, terse, mixed, changes or filter. '
                   'Default: full.')
         )
+        group.add_option(
+            '--state-verbose', '--state_verbose',
+            default=True,
+            help=('Override the configured state_verbose value for minion '
+                  'output. Set to True or False'
+                  'Default: True')
+        )
 
         for option in self.output_options_group.option_list:
             def process(opt):
@@ -1136,6 +1173,12 @@ class OutputOptionsMixIn(six.with_metaclass(MixInMeta, object)):
                             exc
                         )
                     )
+
+    def process_state_verbose(self):
+        if self.options.state_verbose == "True" or self.options.state_verbose == "true":
+            self.options.state_verbose = True
+        elif self.options.state_verbose == "False" or self.options.state_verbose == "false":
+            self.options.state_verbose = False
 
     def _mixin_after_parsed(self):
         group_options_selected = [
@@ -1254,6 +1297,13 @@ class ExecutionOptionsMixIn(six.with_metaclass(MixInMeta, object)):
             default=None,
             help='Script arguments to be fed to the bootstrap script when '
                  'deploying the VM'
+        )
+        group.add_option(
+            '-b', '--bootstrap',
+            nargs=1,
+            default=False,
+            metavar='<HOST> [MINION_ID] [OPTIONS...]',
+            help='Bootstrap an existing machine.'
         )
         self.add_option_group(group)
 
@@ -1497,6 +1547,14 @@ class MasterOptionParser(six.with_metaclass(OptionParserMeta,
     def setup_config(self):
         return config.master_config(self.get_config_file_path())
 
+    def check_running(self):
+        '''
+        Check if a pid file exists and if it is associated with
+        a running process.
+        '''
+        if self.check_pidfile():
+            return self.is_daemonized(self.get_pidfile())
+
 
 class MinionOptionParser(six.with_metaclass(OptionParserMeta, MasterOptionParser)):  # pylint: disable=no-init
 
@@ -1513,6 +1571,31 @@ class MinionOptionParser(six.with_metaclass(OptionParserMeta, MasterOptionParser
     def setup_config(self):
         return config.minion_config(self.get_config_file_path(),
                                     cache_minion_id=True)
+
+
+class ProxyMinionOptionParser(six.with_metaclass(OptionParserMeta,
+                                                 OptionParser,
+                                                 ConfigDirMixIn,
+                                                 MergeConfigMixIn,
+                                                 LogLevelMixIn,
+                                                 RunUserMixin,
+                                                 DaemonMixIn,
+                                                 PidfileMixin,
+                                                 SaltfileMixIn,
+                                                 ProxyIdMixIn)):  # pylint: disable=no-init
+
+    description = (
+        'The Salt proxy minion, connects to and controls devices not able to run a minion.  Receives commands from a remote Salt master.'
+    )
+
+    # ConfigDirMixIn config filename attribute
+    _config_filename_ = 'proxy'
+    # LogLevelMixIn attributes
+    _default_logging_logfile_ = os.path.join(syspaths.LOGS_DIR, 'proxy')
+
+    def setup_config(self):
+        return config.minion_config(self.get_config_file_path(),
+                                   cache_minion_id=False)
 
 
 class SyndicOptionParser(six.with_metaclass(OptionParserMeta,
@@ -1666,6 +1749,14 @@ class SaltCMDOptionParser(six.with_metaclass(OptionParserMeta,
                   'send the return data from the command back to the master, '
                   'but the return data can be redirected into any number of '
                   'systems, databases or applications.')
+        )
+        self.add_option(
+            '--module-executors',
+            dest='module_executors',
+            default=None,
+            metavar='EXECUTOR_LIST',
+            help=('Set an alternative list of executors to override the one '
+                  'set in minion config')
         )
         self.add_option(
             '-d', '--doc', '--documentation',
@@ -2095,7 +2186,7 @@ class SaltKeyOptionParser(six.with_metaclass(OptionParserMeta,
             return
         if not self.options.list.startswith(('acc', 'pre', 'un', 'rej', 'den', 'all')):
             self.error(
-                '{0!r} is not a valid argument to \'--list\''.format(
+                '\'{0}\' is not a valid argument to \'--list\''.format(
                     self.options.list
                 )
             )
@@ -2200,6 +2291,11 @@ class SaltCallOptionParser(six.with_metaclass(OptionParserMeta,
             '--pillar-root',
             default=None,
             help='Set this directory as the base pillar root.'
+        )
+        self.add_option(
+            '--states-dir',
+            default=None,
+            help='Set this directory to search for additional states'
         )
         self.add_option(
             '--retcode-passthrough',
@@ -2710,7 +2806,7 @@ class SPMParser(six.with_metaclass(OptionParserMeta,
     def _mixin_after_parsed(self):
         # spm needs arguments
         if len(self.args) <= 1:
-            if self.args[0] not in ('update_repo',):
+            if not self.args or self.args[0] not in ('update_repo',):
                 self.print_help()
                 self.exit(salt.defaults.exitcodes.EX_USAGE)
 

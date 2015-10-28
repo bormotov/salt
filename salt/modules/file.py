@@ -1042,24 +1042,24 @@ def comment_line(path,
     Comment or Uncomment a line in a text file.
 
     :param path: string
-    The full path to the text file.
+        The full path to the text file.
 
     :param regex: string
-    A regex expression that begins with ``^`` that will find the line you wish
-    to comment. Can be as simple as ``^color =``
+        A regex expression that begins with ``^`` that will find the line you wish
+        to comment. Can be as simple as ``^color =``
 
     :param char: string
-    The character used to comment a line in the type of file you're referencing.
-    Default is ``#``
+        The character used to comment a line in the type of file you're referencing.
+        Default is ``#``
 
     :param cmnt: boolean
-    True to comment the line. False to uncomment the line. Default is True.
+        True to comment the line. False to uncomment the line. Default is True.
 
     :param backup: string
-    The file extension to give the backup file. Default is ``.bak``
+        The file extension to give the backup file. Default is ``.bak``
 
     :return: boolean
-    Returns True if successful, False if not
+        Returns True if successful, False if not
 
     CLI Example:
 
@@ -1080,7 +1080,7 @@ def comment_line(path,
 
     .. code-block:: bash
 
-    salt '*' file.comment_line 'C:\salt\conf\minion' '^log_level: (warning|info|debug)' '#' False '.bk'
+        salt '*' file.comment_line 'C:\salt\conf\minion' '^log_level: (warning|info|debug)' '#' False '.bk'
     '''
     # Get the regex for comment or uncomment
     if cmnt:
@@ -2965,7 +2965,7 @@ def statvfs(path):
             'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
             'f_frsize', 'f_namemax'))
     except (OSError, IOError):
-        raise CommandExecutionError('Could not create {0!r}'.format(link))
+        raise CommandExecutionError('Could not statvfs {0!r}'.format(path))
     return False
 
 
@@ -3646,7 +3646,7 @@ def check_managed(
             __clean_tmp(sfn)
             return False, comments
     changes = check_file_meta(name, sfn, source, source_sum, user,
-                              group, mode, saltenv, template, contents)
+                              group, mode, saltenv, contents)
     __clean_tmp(sfn)
     if changes:
         log.info(changes)
@@ -3705,7 +3705,7 @@ def check_managed_changes(
             __clean_tmp(sfn)
             return False, comments
     changes = check_file_meta(name, sfn, source, source_sum, user,
-                              group, mode, saltenv, template, contents)
+                              group, mode, saltenv, contents)
     __clean_tmp(sfn)
     return changes
 
@@ -3719,7 +3719,6 @@ def check_file_meta(
         group,
         mode,
         saltenv,
-        template=None,
         contents=None):
     '''
     Check for the changes in the file metadata.
@@ -3734,6 +3733,37 @@ def check_file_meta(
 
         Supported hash types include sha512, sha384, sha256, sha224, sha1, and
         md5.
+
+    name
+        Path to file destination
+
+    sfn
+        Template-processed source file contents
+
+    source
+        URL to file source
+
+    source_sum
+        File checksum information as a dictionary
+
+        .. code-block:: yaml
+
+            {hash_type: md5, hsum: <md5sum>}
+
+    user
+        Destination file user owner
+
+    group
+        Destination file group owner
+
+    mode
+        Destination file permissions mode
+
+    saltenv
+        Salt environment used to resolve source files
+
+    contents
+        File contents
     '''
     changes = {}
     if not source_sum:

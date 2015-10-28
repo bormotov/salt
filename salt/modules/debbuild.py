@@ -2,7 +2,7 @@
 '''
 Debian Package builder system
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 This system allows for all of the components to build debs safely in chrooted
 environments. This also provides a function to generate debian repositories
@@ -19,6 +19,7 @@ from salt.ext.six.moves.urllib.parse import urlparse as _urlparse  # pylint: dis
 
 # Import salt libs
 import salt.utils
+from salt.exceptions import SaltInvocationError
 
 # pylint: disable=import-error
 
@@ -34,24 +35,77 @@ def __virtual__():
     return False
 
 
-def _create_pbuilders():
+def _get_build_env(env):
+    '''
+    Get build environment overrides dictionary to use in build process
+    '''
+    env_override = ''
+    if env is None:
+        return env_override
+    if not isinstance(env, dict):
+        raise SaltInvocationError(
+            '\'env\' must be a Python dictionary'
+        )
+    for key, value in env.items():
+        env_override += '{0}={1}\n'.format(key, value)
+        env_override += 'export {0}\n'.format(key)
+    return env_override
+
+
+def _get_repo_env(env):
+    '''
+    Get repo environment overrides dictionary to use in repo process
+    '''
+    env_options = ''
+    if env is None:
+        return env_options
+    if not isinstance(env, dict):
+        raise SaltInvocationError(
+            '\'env\' must be a Python dictionary'
+        )
+    for key, value in env.items():
+        env_options += '{0}\n'.format(value)
+    return env_options
+
+
+def _create_pbuilders(env):
     '''
     Create the .pbuilder family of files in user's home directory
+
+    env
+        A list  or dictionary of environment variables to be set prior to execution.
+        Example:
+
+        .. code-block:: yaml
+
+                - env:
+                  - DEB_BUILD_OPTIONS: 'nocheck'
+
+        .. warning::
+
+            The above illustrates a common PyYAML pitfall, that **yes**,
+            **no**, **on**, **off**, **true**, and **false** are all loaded as
+            boolean ``True`` and ``False`` values, and must be enclosed in
+            quotes to be used as strings. More info on this (and other) PyYAML
+            idiosyncrasies can be found :doc:`here
+            </topics/troubleshooting/yaml_idiosyncrasies>`.
+
+
     '''
     hook_text = '''#!/bin/sh
 set -e
 cat > "/etc/apt/preferences" << EOF
 
-Package: python-abalaster
+Package: python-alabaster
 Pin: release a=testing
 Pin-Priority: 950
 
 Package: python-sphinx
-Pin: release a=experimental
+Pin: release a=testing
 Pin-Priority: 900
 
 Package: sphinx-common
-Pin: release a=experimental
+Pin: release a=testing
 Pin-Priority: 900
 
 Package: *
@@ -85,20 +139,28 @@ if [ -n "${DIST}" ]; then
   APTCACHE="/var/cache/pbuilder/$DIST/aptcache"
 fi
 HOOKDIR="${HOME}/.pbuilder-hooks"
-OTHERMIRROR="deb http://ftp.us.debian.org/debian/ testing main contrib non-free  | deb http://ftp.us.debian.org/debian/ experimental main contrib non-free"
+OTHERMIRROR="deb http://ftp.us.debian.org/debian/ stable  main contrib non-free | deb http://ftp.us.debian.org/debian/ testing main contrib non-free | deb http://ftp.us.debian.org/debian/ unstable main contrib non-free"
 '''
     home = os.path.expanduser('~')
     pbuilder_hooksdir = os.path.join(home, '.pbuilder-hooks')
     if not os.path.isdir(pbuilder_hooksdir):
         os.makedirs(pbuilder_hooksdir)
 
-    d05hook = os.path.join(pbuilder_hooksdir, 'D05apt-preferences')
-    with open(d05hook, "w") as fow:
+    g05hook = os.path.join(pbuilder_hooksdir, 'G05apt-preferences')
+    with salt.utils.fopen(g05hook, 'w') as fow:
         fow.write('{0}'.format(hook_text))
 
+    cmd = 'chmod 755 {0}'.format(g05hook)
+    __salt__['cmd.run'](cmd)
+
     pbuilderrc = os.path.join(home, '.pbuilderrc')
-    with open(pbuilderrc, "w") as fow:
+    with salt.utils.fopen(pbuilderrc, 'w') as fow:
         fow.write('{0}'.format(pbldrc_text))
+
+    env_overrides = _get_build_env(env)
+    if env_overrides and not env_overrides.isspace():
+        with salt.utils.fopen(pbuilderrc, 'a') as fow:
+            fow.write('{0}'.format(env_overrides))
 
 
 def _mk_tree():
@@ -133,7 +195,7 @@ def _get_src(tree_base, source, saltenv='base'):
         shutil.copy(source, dest)
 
 
-def make_src_pkg(dest_dir, spec, sources, template=None, saltenv='base'):
+def make_src_pkg(dest_dir, spec, sources, env=None, template=None, saltenv='base'):
     '''
     Create a platform specific source package from the given platform spec/control file and sources
 
@@ -145,7 +207,7 @@ def make_src_pkg(dest_dir, spec, sources, template=None, saltenv='base'):
     This example command should build the libnacl SOURCE package and place it in
     /var/www/html/ on the minion
     '''
-    _create_pbuilders()
+    _create_pbuilders(env)
     tree_base = _mk_tree()
     ret = []
     if not os.path.isdir(dest_dir):
@@ -185,7 +247,8 @@ def make_src_pkg(dest_dir, spec, sources, template=None, saltenv='base'):
 
     frontname = salttarball.split('.tar.gz')
     salttar_name = frontname[0]
-    debname = salttar_name.replace('-', '_')
+    k = salttar_name.rfind('-')
+    debname = salttar_name[:k] + '_' + salttar_name[k+1:]
     debname += '+ds'
     debname_orig = debname + '.orig.tar.gz'
     abspath_debname = os.path.join(tree_base, debname)
@@ -211,17 +274,16 @@ def make_src_pkg(dest_dir, spec, sources, template=None, saltenv='base'):
     __salt__['cmd.run'](cmd)
 
     for dfile in os.listdir(tree_base):
-        if dfile.startswith('salt_'):
-            if not dfile.endswith('.build'):
-                full = os.path.join(tree_base, dfile)
-                trgt = os.path.join(dest_dir, dfile)
-                shutil.copy(full, trgt)
-                ret.append(trgt)
+        if not dfile.endswith('.build'):
+            full = os.path.join(tree_base, dfile)
+            trgt = os.path.join(dest_dir, dfile)
+            shutil.copy(full, trgt)
+            ret.append(trgt)
 
     return ret
 
 
-def build(runas, tgt, dest_dir, spec, sources, deps, template, saltenv='base'):
+def build(runas, tgt, dest_dir, spec, sources, deps, env, template, saltenv='base'):
     '''
     Given the package destination directory, the tarball containing debian files (e.g. control)
     and package sources, use pbuilder to safely build the platform package
@@ -241,7 +303,7 @@ def build(runas, tgt, dest_dir, spec, sources, deps, template, saltenv='base'):
         except (IOError, OSError):
             pass
     dsc_dir = tempfile.mkdtemp()
-    dscs = make_src_pkg(dsc_dir, spec, sources, template, saltenv)
+    dscs = make_src_pkg(dsc_dir, spec, sources, env, template, saltenv)
 
     # dscs should only contain salt orig and debian tarballs and dsc file
     for dsc in dscs:
@@ -258,25 +320,21 @@ def build(runas, tgt, dest_dir, spec, sources, deps, template, saltenv='base'):
             cmd = 'chown {0} -R {1}'.format(runas, results_dir)
             __salt__['cmd.run'](cmd)
 
-            cmd = 'pbuilder create'
+            cmd = 'pbuilder --create'
             __salt__['cmd.run'](cmd, runas=runas, python_shell=True)
             cmd = 'pbuilder --build --buildresult {1} {0}'.format(dsc, results_dir)
             __salt__['cmd.run'](cmd, runas=runas, python_shell=True)
 
             for bfile in os.listdir(results_dir):
                 full = os.path.join(results_dir, bfile)
-                if bfile.endswith('.deb'):
-                    bdist = os.path.join(dest_dir, bfile)
-                    shutil.copy(full, bdist)
-                else:
-                    with salt.utils.fopen(full, 'r') as fp_:
-                        ret[bfile] = fp_.read()
+                bdist = os.path.join(dest_dir, bfile)
+                shutil.copy(full, bdist)
             shutil.rmtree(results_dir)
     shutil.rmtree(dsc_dir)
     return ret
 
 
-def make_repo(repodir):
+def make_repo(repodir, keyid=None, env=None):
     '''
     Given the repodir, create a Debian repository out of the dsc therein
 
@@ -298,8 +356,17 @@ Pull: jessie
         os.makedirs(repoconf)
 
     repoconfdist = os.path.join(repoconf, 'distributions')
-    with open(repoconfdist, "w") as fow:
+    with salt.utils.fopen(repoconfdist, 'w') as fow:
         fow.write('{0}'.format(repocfg_text))
+
+    if keyid is not None:
+        with salt.utils.fopen(repoconfdist, 'a') as fow:
+            fow.write('SignWith: {0}\n'.format(keyid))
+
+    repocfg_opts = _get_repo_env(env)
+    repoconfopts = os.path.join(repoconf, 'options')
+    with salt.utils.fopen(repoconfopts, 'w') as fow:
+        fow.write('{0}'.format(repocfg_opts))
 
     for debfile in os.listdir(repodir):
         if debfile.endswith('.changes'):

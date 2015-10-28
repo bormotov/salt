@@ -265,13 +265,13 @@ Set up an initial profile at ``/etc/salt/cloud.profiles``:
     base_ec2_private:
       provider: my-ec2-southeast-private-ips
       image: ami-e565ba8c
-      size: t1.micro
+      size: t2.micro
       ssh_username: ec2-user
 
     base_ec2_public:
       provider: my-ec2-southeast-public-ips
       image: ami-e565ba8c
-      size: t1.micro
+      size: t2.micro
       ssh_username: ec2-user
 
     base_ec2_db:
@@ -552,17 +552,6 @@ function exists which renames both the instance, and the salt keys.
 .. code-block:: bash
 
     salt-cloud -a rename mymachine newname=yourmachine
-
-
-EC2 Termination Protection
-==========================
-EC2 allows the user to enable and disable termination protection on a specific
-instance. An instance with this protection enabled cannot be destroyed.
-
-.. code-block:: bash
-
-    salt-cloud -a enable_term_protect mymachine
-    salt-cloud -a disable_term_protect mymachine
 
 
 Rename on Destroy

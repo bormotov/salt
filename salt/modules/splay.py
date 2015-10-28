@@ -11,7 +11,7 @@ import time
 import salt.ext.six as six
 
 # Import Salt Libs
-from salt.exceptions import CommandExecutionError
+from salt.exceptions import CommandExecutionError, SaltInvocationError
 
 _DEFAULT_SPLAYTIME = 600
 _DEFAULT_SIZE = 8192
@@ -38,31 +38,50 @@ def _get_hash(hashable, size):
     return (h & (size - 1)) & bitmask
 
 
-def _calc_splay(hashable, splaytime=_DEFAULT_SPLAYTIME, size=_DEFAULT_SIZE):
+def calc_splay(hashable, splaytime=_DEFAULT_SPLAYTIME, size=_DEFAULT_SIZE):
+    '''
+    Use directly to get a value from the Jenkins One-At-A-Time Hash Function using an
+    arbitrary key.
+
+
+    CLI Example:
+      # Get a value from the hash function between 1 and 60 using key 'foobar'
+      salt example-host calc_splay 'foobar' 60
+    '''
     hash_val = _get_hash(hashable, size)
     return int(splaytime * hash_val / float(size))
 
 
-def splay(*args, **kwargs):
+def splay(fun, *args, **kwargs):
     '''
     Splay a salt function call execution time across minions over
     a number of seconds (default: 600)
 
+    .. note::
+        You *probably* want to use --async here and look up the job results later.
+        If you're dead set on getting the output from the CLI command, then make
+        sure to set the timeout (with the -t flag) to something greater than the
+        splaytime (max splaytime + time to execute job).
+        Otherwise, it's very likely that the cli will time out before the job returns.
 
-    NOTE: You *probably* want to use --async here and look up the job results later.
-          If you're dead set on getting the output from the CLI command, then make
-          sure to set the timeout (with the -t flag) to something greater than the
-          splaytime (max splaytime + time to execute job).
-          Otherwise, it's very likely that the cli will time out before the job returns.
 
+    CLI Examples:
 
-    CLI Example:
-    # With default splaytime
-      salt --async '*' splay.splay pkg.install cowsay version=3.03-8.el6
+    .. code-block:: bash
 
-    # With specified splaytime (5 minutes) and timeout with 10 second buffer
+        salt --async '*' splay.splay pkg.install cowsay version=3.03-8.el6
+
+    .. code-block:: bash
+
+      # With specified splaytime (5 minutes) and timeout with 10 second buffer
       salt -t 310 '*' splay.splay 300 pkg.version cowsay
     '''
+    if fun == 'sudo.salt_call':
+        __context__['retcode'] = 1
+        raise SaltInvocationError('sudo.salt_call is not designed to be run '
+                                  'directly, but is used by the minion when '
+                                  'the sudo_user config is set.')
+
     # Convert args tuple to a list so we can pop the splaytime and func out
     args = list(args)
 
@@ -81,7 +100,7 @@ def splay(*args, **kwargs):
     if func not in __salt__:
         raise CommandExecutionError('Unable to find module function {0}'.format(func))
 
-    my_delay = _calc_splay(__grains__['id'], splaytime=splaytime)
+    my_delay = calc_splay(__grains__['id'], splaytime=splaytime)
     time.sleep(my_delay)
     # Get rid of the hidden kwargs that salt injects
     func_kwargs = dict((k, v) for k, v in six.iteritems(kwargs) if not k.startswith('__'))
@@ -106,4 +125,4 @@ def show(splaytime=_DEFAULT_SPLAYTIME):
     if not isinstance(splaytime, int):
         splaytime = int(splaytime)
 
-    return str(_calc_splay(__grains__['id'], splaytime=splaytime))
+    return str(calc_splay(__grains__['id'], splaytime=splaytime))

@@ -89,7 +89,7 @@ def list_nodes(**kwargs):
     nodes = list_nodes_full()
     for node in nodes:
         ret[node] = {}
-        for prop in ('id', 'image', 'size', 'state', 'private_ips', 'public_ips'):
+        for prop in 'id', 'image', 'size', 'state', 'private_ips', 'public_ips':
             ret[node][prop] = nodes[node][prop]
 
     return ret
@@ -262,9 +262,9 @@ def create(vm_):
 
     ret.update(show_instance(vm_['name'], call='action'))
 
-    log.info('Created Cloud VM {0[name]!r}'.format(vm_))
+    log.info('Created Cloud VM \'{0[name]}\''.format(vm_))
     log.debug(
-        '{0[name]!r} VM creation details:\n{1}'.format(
+        '\'{0[name]}\' VM creation details:\n{1}'.format(
         vm_, pprint.pformat(data)
             )
     )

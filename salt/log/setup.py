@@ -40,6 +40,7 @@ from salt.textformat import TextFormat
 from salt.log.handlers import (TemporaryLoggingHandler,
                                StreamHandler,
                                SysLogHandler,
+                               FileHandler,
                                WatchedFileHandler,
                                QueueHandler)
 from salt.log.mixins import LoggingMixInMeta, NewStyleClassMixIn
@@ -273,18 +274,21 @@ class SaltLoggingClass(six.with_metaclass(LoggingMixInMeta, LOGGING_LOGGER_CLASS
 
     def _log(self, level, msg, args, exc_info=None, extra=None,  # pylint: disable=arguments-differ
              exc_info_on_loglevel=None):
-        # If both exc_info and exc_info_on_loglevel are both passed, let's fail.
+        # If both exc_info and exc_info_on_loglevel are both passed, let's fail
         if exc_info and exc_info_on_loglevel:
             raise RuntimeError(
-                'Please only use one of \'exc_info\' and \'exc_info_on_loglevel\', not both'
+                'Only one of \'exc_info\' and \'exc_info_on_loglevel\' is '
+                'permitted'
             )
         if exc_info_on_loglevel is not None:
             if isinstance(exc_info_on_loglevel, six.string_types):
-                exc_info_on_loglevel = LOG_LEVELS.get(exc_info_on_loglevel, logging.ERROR)
+                exc_info_on_loglevel = LOG_LEVELS.get(exc_info_on_loglevel,
+                                                      logging.ERROR)
             elif not isinstance(exc_info_on_loglevel, int):
                 raise RuntimeError(
-                    'The value of \'exc_info_on_loglevel\' needs to be a logging level or '
-                    'a logging level name, not {0!r}'.format(exc_info_on_loglevel)
+                    'The value of \'exc_info_on_loglevel\' needs to be a '
+                    'logging level or a logging level name, not \'{0}\''
+                    .format(exc_info_on_loglevel)
                 )
         if extra is None:
             extra = {'exc_info_on_loglevel': exc_info_on_loglevel}
@@ -306,7 +310,8 @@ class SaltLoggingClass(six.with_metaclass(LoggingMixInMeta, LOGGING_LOGGER_CLASS
             extra = None
 
         # Let's try to make every logging message unicode
-        if isinstance(msg, six.string_types) and not isinstance(msg, six.text_type):
+        if isinstance(msg, six.string_types) \
+                and not isinstance(msg, six.text_type):
             salt_system_encoding = __salt_system_encoding__
             if salt_system_encoding == 'ascii':
                 # Encoding detection most likely failed, let's use the utf-8
@@ -331,7 +336,7 @@ class SaltLoggingClass(six.with_metaclass(LoggingMixInMeta, LOGGING_LOGGER_CLASS
             for key in extra:
                 if (key in ['message', 'asctime']) or (key in logrecord.__dict__):
                     raise KeyError(
-                        'Attempt to overwrite {0!r} in LogRecord'.format(key)
+                        'Attempt to overwrite \'{0}\' in LogRecord'.format(key)
                     )
                 logrecord.__dict__[key] = extra[key]
 
@@ -562,7 +567,7 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
                 # Logging facilities start with LOG_ if this is not the case
                 # fail right now!
                 raise RuntimeError(
-                    'The syslog facility {0!r} is not known'.format(
+                    'The syslog facility \'{0}\' is not known'.format(
                         facility_name
                     )
                 )
@@ -577,7 +582,7 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
             # This python syslog version does not know about the user provided
             # facility name
             raise RuntimeError(
-                'The syslog facility {0!r} is not known'.format(
+                'The syslog facility \'{0}\' is not known'.format(
                     facility_name
                 )
             )
@@ -704,7 +709,7 @@ def setup_extended_logging(opts):
                 continue
 
             logging.getLogger(__name__).debug(
-                'Adding the {0!r} provided logging handler: {1!r}'.format(
+                'Adding the \'{0}\' provided logging handler: \'{1}\''.format(
                     name, handler
                 )
             )
@@ -808,6 +813,18 @@ def set_logger_level(logger_name, log_level='error'):
     logging.getLogger(logger_name).setLevel(
         LOG_LEVELS.get(log_level.lower(), logging.ERROR)
     )
+
+
+def patch_python_logging_handlers():
+    '''
+    Patch the python logging handlers with out mixed-in classes
+    '''
+    logging.StreamHandler = StreamHandler
+    logging.FileHandler = FileHandler
+    logging.handlers.SysLogHandler = SysLogHandler
+    logging.handlers.WatchedFileHandler = WatchedFileHandler
+    if sys.version_info >= (3, 2):
+        logging.handlers.QueueHandler = QueueHandler
 
 
 def __process_multiprocessing_logging_queue(queue):

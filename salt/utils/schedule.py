@@ -274,6 +274,7 @@ import salt.loader
 import salt.minion
 import salt.payload
 import salt.syspaths
+import salt.exceptions
 from salt.utils.odict import OrderedDict
 from salt.utils.process import os_is_running
 
@@ -386,6 +387,12 @@ class Schedule(object):
             raise ValueError('Scheduled jobs have to be of type dict.')
         if not len(data) == 1:
             raise ValueError('You can only schedule one new job at a time.')
+
+        # if enabled is not included in the job,
+        # assume job is enabled.
+        for job in data.keys():
+            if 'enabled' not in data[job]:
+                data[job]['enabled'] = True
 
         new_job = next(six.iterkeys(data))
 
@@ -704,7 +711,10 @@ class Schedule(object):
                 load = {'cmd': '_return', 'id': self.opts['id']}
                 for key, value in six.iteritems(mret):
                     load[key] = value
-                channel.send(load)
+                try:
+                    channel.send(load)
+                except salt.exceptions.SaltReqTimeoutError:
+                    log.error('Timeout error during scheduled job: {0}. Salt master could not be reached.'.format(ret['fun']))
 
         except Exception:
             log.exception("Unhandled exception running {0}".format(ret['fun']))

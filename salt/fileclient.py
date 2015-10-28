@@ -22,6 +22,7 @@ import salt.payload
 import salt.transport
 import salt.fileserver
 import salt.utils
+import salt.utils.files
 import salt.utils.templates
 import salt.utils.url
 import salt.utils.gzip_util
@@ -219,7 +220,7 @@ class Client(object):
             path = path + '/'
 
         log.info(
-            'Caching directory {0!r} for environment {1!r}'.format(
+            'Caching directory \'{0}\' for environment \'{1}\''.format(
                 path, saltenv
             )
         )
@@ -389,7 +390,7 @@ class Client(object):
         if limit_traversal:
             if saltenv not in self.opts['file_roots']:
                 log.warning(
-                    'During an attempt to list states for saltenv {0!r}, '
+                    'During an attempt to list states for saltenv \'{0}\', '
                     'the environment could not be found in the configured '
                     'file roots'.format(saltenv)
                 )
@@ -511,7 +512,8 @@ class Client(object):
         ret.sort()
         return ret
 
-    def get_url(self, url, dest, makedirs=False, saltenv='base', env=None, no_cache=False):
+    def get_url(self, url, dest, makedirs=False, saltenv='base',
+                env=None, no_cache=False):
         '''
         Get a single file from a URL.
         '''
@@ -531,7 +533,7 @@ class Client(object):
             # Local filesystem
             if not os.path.isabs(url_data.path):
                 raise CommandExecutionError(
-                    'Path {0!r} is not absolute'.format(url_data.path)
+                    'Path \'{0}\' is not absolute'.format(url_data.path)
                 )
             return url_data.path
 
@@ -616,14 +618,59 @@ class Client(object):
                 password=url_data.password,
                 **get_kwargs
             )
+
             if 'handle' not in query:
                 raise MinionError('Error: {0}'.format(query['error']))
+
+            try:
+                content_length = int(query['handle'].headers['Content-Length'])
+            except (AttributeError, KeyError, ValueError):
+                # Shouldn't happen but don't let this raise an exception.
+                # Instead, just don't do content length checking below.
+                log.warning(
+                    'No Content-Length header in HTTP response from fetch of '
+                    '{0}, or Content-Length is non-numeric'.format(fixed_url)
+                )
+                content_length = None
+
             if no_cache:
-                return ''.join(result)
+                content = ''.join(result)
+                if content_length is not None \
+                        and len(content) > content_length:
+                    return content[-content_length:]
+                else:
+                    return content
             else:
                 destfp.close()
                 destfp = None
-                os.rename(dest_tmp, dest)
+                dest_tmp_size = os.path.getsize(dest_tmp)
+                if content_length is not None \
+                        and dest_tmp_size > content_length:
+                    log.warning(
+                        'Size of file downloaded from {0} ({1}) does not '
+                        'match the Content-Length ({2}). This is probably due '
+                        'to an upstream bug in tornado '
+                        '(https://github.com/tornadoweb/tornado/issues/1518). '
+                        'Re-writing the file to correct this.'.format(
+                            fixed_url,
+                            dest_tmp_size,
+                            content_length
+                        )
+                    )
+                    dest_tmp_bak = dest_tmp + '.bak'
+                    salt.utils.files.rename(dest_tmp, dest_tmp_bak)
+                    with salt.utils.fopen(dest_tmp_bak, 'rb') as fp_bak:
+                        fp_bak.seek(dest_tmp_size - content_length)
+                        with salt.utils.fopen(dest_tmp, 'wb') as fp_new:
+                            while True:
+                                chunk = fp_bak.read(
+                                    self.opts['file_buffer_size']
+                                )
+                                if not chunk:
+                                    break
+                                fp_new.write(chunk)
+                    os.remove(dest_tmp_bak)
+                salt.utils.files.rename(dest_tmp, dest)
                 return dest
         except HTTPError as exc:
             raise MinionError('HTTP error {0} reading {1}: {3}'.format(
@@ -982,7 +1029,7 @@ class RemoteClient(Client):
         hash_server = self.hash_file(path, saltenv)
         if hash_server == '':
             log.debug(
-                'Could not find file from saltenv {0!r}, {1!r}'.format(
+                'Could not find file from saltenv \'{0}\', \'{1}\''.format(
                     saltenv, path
                 )
             )
@@ -1005,34 +1052,31 @@ class RemoteClient(Client):
             rel_path = self._check_proto(path)
 
             log.debug(
-                'In saltenv {0!r}, looking at rel_path {1!r} to resolve {2!r}'.format(
-                    saltenv, rel_path, path
-                )
+                'In saltenv \'{0}\', looking at rel_path \'{1}\' to resolve '
+                '\'{2}\''.format(saltenv, rel_path, path)
             )
             with self._cache_loc(rel_path, saltenv) as cache_dest:
                 dest2check = cache_dest
 
         log.debug(
-            'In saltenv {0!r}, ** considering ** path {1!r} to resolve {2!r}'.format(
-                saltenv, dest2check, path
-            )
+            'In saltenv \'{0}\', ** considering ** path \'{1}\' to resolve '
+            '\'{2}\''.format(saltenv, dest2check, path)
         )
 
         if dest2check and os.path.isfile(dest2check):
             hash_local = self.hash_file(dest2check, saltenv)
             if hash_local == hash_server:
                 log.info(
-                    'Fetching file from saltenv {0!r}, ** skipped ** '
-                    'latest already in cache {1!r}'.format(
+                    'Fetching file from saltenv \'{0}\', ** skipped ** '
+                    'latest already in cache \'{1}\''.format(
                         saltenv, path
                     )
                 )
                 return dest2check
 
         log.debug(
-            'Fetching file from saltenv {0!r}, ** attempting ** {1!r}'.format(
-                saltenv, path
-            )
+            'Fetching file from saltenv \'{0}\', ** attempting ** '
+            '\'{1}\''.format(saltenv, path)
         )
         d_tries = 0
         transport_tries = 0
@@ -1106,15 +1150,13 @@ class RemoteClient(Client):
         if fn_:
             fn_.close()
             log.info(
-                'Fetching file from saltenv {0!r}, ** done ** {1!r}'.format(
-                    saltenv, path
-                )
+                'Fetching file from saltenv \'{0}\', ** done ** '
+                '\'{1}\''.format(saltenv, path)
             )
         else:
             log.debug(
-                'In saltenv {0!r}, we are ** missing ** the file {1!r}'.format(
-                    saltenv, path
-                )
+                'In saltenv \'{0}\', we are ** missing ** the file '
+                '\'{1}\''.format(saltenv, path)
             )
 
         return dest

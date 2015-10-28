@@ -35,7 +35,6 @@ INTEGRATION_TEST_DIR = os.path.dirname(
     os.path.normpath(os.path.abspath(__file__))
 )
 CODE_DIR = os.path.dirname(os.path.dirname(INTEGRATION_TEST_DIR))
-SALT_LIBS = os.path.dirname(CODE_DIR)
 
 # Import Salt Testing libs
 from salttesting import TestCase
@@ -46,7 +45,7 @@ from salttesting.helpers import requires_sshd_server
 from salttesting.helpers import ensure_in_syspath, RedirectStdStreams
 
 # Update sys.path
-ensure_in_syspath(CODE_DIR, SALT_LIBS)
+ensure_in_syspath(CODE_DIR)
 
 # Import Salt libs
 import salt
@@ -488,7 +487,7 @@ class TestDaemon(object):
         if os.path.isdir(TMP_CONF_DIR):
             shutil.rmtree(TMP_CONF_DIR)
         os.makedirs(TMP_CONF_DIR)
-        print(' * Transplanting configuration files to {0!r}'.format(TMP_CONF_DIR))
+        print(' * Transplanting configuration files to \'{0}\''.format(TMP_CONF_DIR))
         running_tests_user = pwd.getpwuid(os.getuid()).pw_name
         master_opts = salt.config._read_conf_file(os.path.join(CONF_DIR, 'master'))
         master_opts['user'] = running_tests_user
@@ -1168,7 +1167,7 @@ class ModuleCase(TestCase, SaltClientTestCaseMixIn):
                 job_kill = self.run_function('saltutil.kill_job', [jid])
                 msg = (
                     'A running state.single was found causing a state lock. '
-                    'Job details: {0!r}  Killing Job Returned: {1!r}'.format(
+                    'Job details: \'{0}\'  Killing Job Returned: \'{1}\''.format(
                         job_data, job_kill
                     )
                 )
@@ -1318,7 +1317,7 @@ class ShellCaseCommonTestsMixIn(CheckShellBinaryNameAndVersionMixIn):
         if not out:
             self.skipTest(
                 'Failed to get the output of \'git describe\'. '
-                'Error: {0!r}'.format(
+                'Error: \'{0}\''.format(
                     salt.utils.to_str(err)
                 )
             )
@@ -1328,7 +1327,7 @@ class ShellCaseCommonTestsMixIn(CheckShellBinaryNameAndVersionMixIn):
         if parsed_version.info < __version_info__:
             self.skipTest(
                 'We\'re likely about to release a new version. This test '
-                'would fail. Parsed({0!r}) < Expected({1!r})'.format(
+                'would fail. Parsed(\'{0}\') < Expected(\'{1}\')'.format(
                     parsed_version.info, __version_info__
                 )
             )
@@ -1404,7 +1403,7 @@ class SaltReturnAssertsMixIn(object):
             except (KeyError, TypeError):
                 raise AssertionError(
                     'Could not get ret{0} from salt\'s return: {1}'.format(
-                        ''.join(['[{0!r}]'.format(k) for k in keys]), part
+                        ''.join(['[\'{0}\']'.format(k) for k in keys]), part
                     )
                 )
             while okeys:
@@ -1413,7 +1412,7 @@ class SaltReturnAssertsMixIn(object):
                 except (KeyError, TypeError):
                     raise AssertionError(
                         'Could not get ret{0} from salt\'s return: {1}'.format(
-                            ''.join(['[{0!r}]'.format(k) for k in keys]), part
+                            ''.join(['[\'{0}\']'.format(k) for k in keys]), part
                         )
                     )
             return ret_item

@@ -424,12 +424,17 @@
 # default behaviour is an unordered merge. To prevent top files from
 # being merged together and instead to only use the top file from the
 # requested environment, set this value to 'same'. 
-# top_file_merging_strategy: merge
+#top_file_merging_strategy: merge
 
 # To specify the order in which environments are merged, set the ordering
 # in the env_order option. Given a conflict, the last matching value will
 # win.
-# env_order: ['base', 'dev', 'prod']
+#env_order: ['base', 'dev', 'prod']
+
+# If top_file_merging_strategy is set to 'same' and an environment does not
+# contain a top file, the top file in the environment specified by default_top
+# will be used instead.
+#default_top: base
 
 # The hash_type is the hash to use when discovering the hash of a file on
 # the master server. The default is md5, but sha1, sha224, sha256, sha384
@@ -565,7 +570,7 @@
 # master config file that can then be used on minions.
 #pillar_opts: False
 
-# The pillar_safe_render_error option prevents the master from passing piller
+# The pillar_safe_render_error option prevents the master from passing pillar
 # render errors to the minion. This is set on by default because the error could
 # contain templating data which would give that minion information it shouldn't
 # have, like a password! When set true the error message will only show:
@@ -687,6 +692,10 @@
 
 # The level of messages to send to the console.
 # One of 'garbage', 'trace', 'debug', info', 'warning', 'error', 'critical'.
+#
+# The following log levels are considered INSECURE and may log sensitive data:
+# ['garbage', 'trace', 'debug']
+#
 #log_level: warning
 
 # The level of messages to send to the log file.
