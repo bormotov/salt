@@ -231,8 +231,14 @@ VALID_OPTS = {
     # A flag indicating that a master should accept any minion connection without any authentication
     'open_mode': bool,
 
-    # Whether or not processes should be forked when needed. The altnerative is to use threading.
+    # Whether or not processes should be forked when needed. The alternative is to use threading.
     'multiprocessing': bool,
+
+    # Whether or not the salt minion should run scheduled mine updates
+    'mine_enabled': bool,
+
+    # Whether or not scheduled mine updates should be accompanied by a job return for the job cache
+    'mine_return_job': bool,
 
     # Schedule a mine update every n number of seconds
     'mine_interval': int,
@@ -342,7 +348,7 @@ VALID_OPTS = {
     # The grains dictionary for a minion, containing specific "facts" about the minion
     'grains': dict,
 
-    # Allow a deamon to function even if the key directories are not secured
+    # Allow a daemon to function even if the key directories are not secured
     'permissive_pki_access': bool,
 
     # The path to a directory to pull in configuration file includes
@@ -391,7 +397,7 @@ VALID_OPTS = {
     # default match type for filtering events tags: startswith, endswith, find, regex, fnmatch
     'event_match_type': str,
 
-    # This pidfile to write out to when a deamon starts
+    # This pidfile to write out to when a daemon starts
     'pidfile': str,
 
     # Used with the SECO range master tops system
@@ -525,6 +531,8 @@ VALID_OPTS = {
     'runner_dirs': list,
     'client_acl': dict,
     'client_acl_blacklist': dict,
+    'publisher_acl': dict,
+    'publisher_acl_blacklist': dict,
     'sudo_acl': bool,
     'external_auth': dict,
     'token_expire': int,
@@ -649,7 +657,7 @@ VALID_OPTS = {
     # The size of key that should be generated when creating new keys
     'keysize': int,
 
-    # The transport system for this deamon. (i.e. zeromq, raet, etc)
+    # The transport system for this daemon. (i.e. zeromq, raet, etc)
     'transport': str,
 
     # FIXME Appears to be unused
@@ -724,8 +732,8 @@ VALID_OPTS = {
     # Instructs the salt CLI to print a summary of a minion reponses before returning
     'cli_summary': bool,
 
-    # The number of minions the master should allow to connect. Can have performance implications
-    # in large setups.
+    # The maximum number of minion connections allowed by the master. Can have performance
+    # implications in large setups.
     'max_minions': int,
 
 
@@ -860,6 +868,8 @@ DEFAULT_MINION_OPTS = {
     'auto_accept': True,
     'autosign_timeout': 120,
     'multiprocessing': _DFLT_MULTIPROCESSING_MODE,
+    'mine_enabled': True,
+    'mine_return_job': False,
     'mine_interval': 60,
     'ipc_mode': _DFLT_IPC_MODE,
     'ipv6': False,
@@ -1059,6 +1069,8 @@ DEFAULT_MASTER_OPTS = {
     'outputter_dirs': [],
     'client_acl': {},
     'client_acl_blacklist': {},
+    'publisher_acl': {},
+    'publisher_acl_blacklist': {},
     'sudo_acl': False,
     'external_auth': {},
     'token_expire': 43200,
@@ -1198,6 +1210,8 @@ DEFAULT_MASTER_OPTS = {
     'dummy_pub': False,
     'http_request_timeout': 1 * 60 * 60.0,  # 1 hour
     'http_max_body': 100 * 1024 * 1024 * 1024,  # 100GB
+    'python2_bin': 'python2',
+    'python3_bin': 'python3',
 }
 
 
@@ -2734,12 +2748,14 @@ def apply_minion_config(overrides=None,
     if overrides:
         opts.update(overrides)
 
+    opts['__cli'] = os.path.basename(sys.argv[0])
+
     if len(opts['sock_dir']) > len(opts['cachedir']) + 10:
         opts['sock_dir'] = os.path.join(opts['cachedir'], '.salt-unix')
 
     # No ID provided. Will getfqdn save us?
     using_ip_for_id = False
-    if opts['id'] is None:
+    if not opts.get('id'):
         opts['id'], using_ip_for_id = get_id(
                 opts,
                 cache_minion_id=cache_minion_id)
@@ -2856,7 +2872,7 @@ def apply_master_config(overrides=None, defaults=None):
 
     using_ip_for_id = False
     append_master = False
-    if opts.get('id') is None:
+    if not opts.get('id'):
         opts['id'], using_ip_for_id = get_id(
                 opts,
                 cache_minion_id=None)
