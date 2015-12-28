@@ -82,30 +82,31 @@ def _walk_through(job_dir):
 #TODO: add to returner docs-- this is a new one
 def prep_jid(nocache=False, passed_jid=None, recurse_count=0):
     '''
-    Return a job id and prepare the job id directory
-    This is the function responsible for making sure jids don't collide (unless its passed a jid)
+    Return a job id and prepare the job id directory.
+
+    This is the function responsible for making sure jids don't collide (unless
+    it is passed a jid).
     So do what you have to do to make sure that stays the case
     '''
     if recurse_count >= 5:
         err = 'prep_jid could not store a jid after {0} tries.'.format(recurse_count)
         log.error(err)
         raise salt.exceptions.SaltCacheError(err)
-    if passed_jid is None:  # this can be a None of an empty string
+    if passed_jid is None:  # this can be a None or an empty string.
         jid = salt.utils.jid.gen_jid()
     else:
         jid = passed_jid
 
     jid_dir_ = _jid_dir(jid)
 
-    # make sure we create the jid dir, otherwise someone else is using it,
-    # meaning we need a new jid
+    # Make sure we create the jid dir, otherwise someone else is using it,
+    # meaning we need a new jid.
     try:
         os.makedirs(jid_dir_)
     except OSError:
         time.sleep(0.1)
         if passed_jid is None:
-            recurse_count += recurse_count
-            return prep_jid(nocache=nocache)
+            return prep_jid(nocache=nocache, recurse_count=recurse_count+1)
 
     try:
         with salt.utils.fopen(os.path.join(jid_dir_, 'jid'), 'wb+') as fn_:
@@ -119,8 +120,8 @@ def prep_jid(nocache=False, passed_jid=None, recurse_count=0):
     except IOError:
         log.warn('Could not write out jid file for job {0}. Retrying.'.format(jid))
         time.sleep(0.1)
-        recurse_count += recurse_count
-        return prep_jid(passed_jid=jid, nocache=nocache)
+        return prep_jid(passed_jid=jid, nocache=nocache,
+                        recurse_count=recurse_count+1)
 
     return jid
 
@@ -181,9 +182,13 @@ def returner(load):
         )
 
 
-def save_load(jid, clear_load):
+def save_load(jid, clear_load, minions=None):
     '''
     Save the load to the specified jid
+
+    minions argument is to provide a pre-computed list of matched minions for
+    the job, for cases when this function can't compute that list itself (such
+    as for salt-ssh)
     '''
     jid_dir = _jid_dir(jid)
 
@@ -193,6 +198,14 @@ def save_load(jid, clear_load):
     try:
         if not os.path.exists(jid_dir):
             os.makedirs(jid_dir)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
+            # rarely, the directory can be already concurrently created between
+            # the os.path.exists and the os.makedirs lines above
+            pass
+        else:
+            raise
+    try:
         serial.dump(
             clear_load,
             salt.utils.fopen(os.path.join(jid_dir, LOAD_P), 'w+b')
@@ -202,12 +215,13 @@ def save_load(jid, clear_load):
 
     # if you have a tgt, save that for the UI etc
     if 'tgt' in clear_load:
-        ckminions = salt.utils.minions.CkMinions(__opts__)
-        # Retrieve the minions list
-        minions = ckminions.check_minions(
-                clear_load['tgt'],
-                clear_load.get('tgt_type', 'glob')
-                )
+        if minions is None:
+            ckminions = salt.utils.minions.CkMinions(__opts__)
+            # Retrieve the minions list
+            minions = ckminions.check_minions(
+                    clear_load['tgt'],
+                    clear_load.get('tgt_type', 'glob')
+                    )
         # save the minions to a cache so we can see in the UI
         try:
             serial.dump(

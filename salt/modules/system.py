@@ -12,7 +12,8 @@ def __virtual__():
     Only supported on POSIX-like systems
     '''
     if salt.utils.is_windows() or not salt.utils.which('shutdown'):
-        return False
+        return (False, 'The system execution module failed to load: '
+                'only available on Linux systems with shutdown command.')
     return True
 
 
@@ -61,9 +62,12 @@ def poweroff():
     return ret
 
 
-def reboot():
+def reboot(at_time=None):
     '''
-    Reboot the system using the 'reboot' command
+    Reboot the system
+
+    at_time
+        The wait time in minutes before the system will be shutdown.
 
     CLI Example:
 
@@ -71,7 +75,7 @@ def reboot():
 
         salt '*' system.reboot
     '''
-    cmd = ['reboot']
+    cmd = ['shutdown', '-r', ('{0}'.format(at_time) if at_time else 'now')]
     ret = __salt__['cmd.run'](cmd, python_shell=False)
     return ret
 
@@ -89,10 +93,6 @@ def shutdown(at_time=None):
 
         salt '*' system.shutdown 5
     '''
-
-    if at_time:
-        cmd = ['shutdown', '-h', '{0}'.format(at_time)]
-    else:
-        cmd = ['shutdown', '-h', 'now']
+    cmd = ['shutdown', '-h', ('{0}'.format(at_time) if at_time else 'now')]
     ret = __salt__['cmd.run'](cmd, python_shell=False)
     return ret

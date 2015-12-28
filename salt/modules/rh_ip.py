@@ -40,7 +40,7 @@ def __virtual__():
     '''
     if __grains__['os_family'] == 'RedHat':
         return __virtualname__
-    return False
+    return (False, 'The rh_ip execution module cannot be loaded: this module is only available on RHEL/Fedora based distributions.')
 
 
 # Setup networking attributes
@@ -206,7 +206,7 @@ def _parse_settings_bond(opts, iface):
         # Used with miimon.
         # On: driver sends mii
         # Off: ethtool sends mii
-        'use_carrier': 'on',
+        'use_carrier': '0',
         # Default. Don't change unless you know what you are doing.
         'xmit_hash_policy': 'layer2',
     }
@@ -276,9 +276,12 @@ def _parse_settings_bond_0(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -322,9 +325,9 @@ def _parse_settings_bond_1(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -349,9 +352,12 @@ def _parse_settings_bond_2(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -405,9 +411,9 @@ def _parse_settings_bond_3(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -449,9 +455,9 @@ def _parse_settings_bond_4(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -492,9 +498,9 @@ def _parse_settings_bond_5(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -528,9 +534,9 @@ def _parse_settings_bond_6(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -539,6 +545,34 @@ def _parse_settings_bond_6(opts, iface, bond_def):
         bond.update({'use_carrier': bond_def['use_carrier']})
 
     return bond
+
+
+def _parse_settings_vlan(opts, iface):
+
+    '''
+    Filters given options and outputs valid settings for a vlan
+    '''
+    vlan = {}
+    if 'reorder_hdr' in opts:
+        if opts['reorder_hdr'] in _CONFIG_TRUE + _CONFIG_FALSE:
+            vlan.update({'reorder_hdr': opts['reorder_hdr']})
+        else:
+            valid = _CONFIG_TRUE + _CONFIG_FALSE
+            _raise_error_iface(iface, 'reorder_hdr', valid)
+
+    if 'vlan_id' in opts:
+        if opts['vlan_id'] > 0:
+            vlan.update({'vlan_id': opts['vlan_id']})
+        else:
+            _raise_error_iface(iface, 'vlan_id', 'Positive integer')
+
+    if 'phys_dev' in opts:
+        if len(opts['phys_dev']) > 0:
+            vlan.update({'phys_dev': opts['phys_dev']})
+        else:
+            _raise_error_iface(iface, 'phys_dev', 'Non-empty string')
+
+    return vlan
 
 
 def _parse_settings_eth(opts, iface_type, enabled, iface):
@@ -561,7 +595,7 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
     if 'mtu' in opts:
         try:
             result['mtu'] = int(opts['mtu'])
-        except Exception:
+        except ValueError:
             _raise_error_iface(iface, 'mtu', ['integer'])
 
     if iface_type not in ['bridge']:
@@ -576,6 +610,14 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
         bonding = _parse_settings_bond(opts, iface)
         if bonding:
             result['bonding'] = bonding
+            result['devtype'] = "Bond"
+
+    if iface_type == 'vlan':
+        vlan = _parse_settings_vlan(opts, iface)
+        if vlan:
+            result['devtype'] = "Vlan"
+            for opt in vlan:
+                result[opt] = opts[opt]
 
     if iface_type not in ['bond', 'vlan', 'bridge', 'ipip']:
         if 'addr' in opts:
@@ -641,13 +683,6 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
     for opt in ['ipv6addr', 'ipv6gateway']:
         if opt in opts:
             result[opt] = opts[opt]
-
-    if 'mtu' in opts:
-        try:
-            int(opts['mtu'])
-            result['mtu'] = opts['mtu']
-        except Exception:
-            _raise_error_iface(iface, 'mtu', ['integer'])
 
     if 'enable_ipv6' in opts:
         result['enable_ipv6'] = opts['enable_ipv6']

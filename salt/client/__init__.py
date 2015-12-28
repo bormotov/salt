@@ -75,12 +75,19 @@ log = logging.getLogger(__name__)
 def get_local_client(
         c_path=os.path.join(syspaths.CONFIG_DIR, 'master'),
         mopts=None,
-        skip_perm_errors=False):
+        skip_perm_errors=False,
+        io_loop=None):
     '''
     .. versionadded:: 2014.7.0
 
     Read in the config and return the correct LocalClient object based on
     the configured transport
+
+    :param IOLoop io_loop: io_loop used for events.
+                           Pass in an io_loop if you want asynchronous
+                           operation for obtaining events. Eg use of
+                           set_event_handler() API. Otherwise, operation
+                           will be synchronous.
     '''
     if mopts:
         opts = mopts
@@ -93,7 +100,10 @@ def get_local_client(
         return salt.client.raet.LocalClient(mopts=opts)
     # TODO: AIO core is separate from transport
     elif opts['transport'] in ('zeromq', 'tcp'):
-        return LocalClient(mopts=opts, skip_perm_errors=skip_perm_errors)
+        return LocalClient(
+            mopts=opts,
+            skip_perm_errors=skip_perm_errors,
+            io_loop=io_loop)
 
 
 class LocalClient(object):
@@ -118,7 +128,15 @@ class LocalClient(object):
     '''
     def __init__(self,
                  c_path=os.path.join(syspaths.CONFIG_DIR, 'master'),
-                 mopts=None, skip_perm_errors=False):
+                 mopts=None, skip_perm_errors=False,
+                 io_loop=None):
+        '''
+        :param IOLoop io_loop: io_loop used for events.
+                               Pass in an io_loop if you want asynchronous
+                               operation for obtaining events. Eg use of
+                               set_event_handler() API. Otherwise,
+                               operation will be synchronous.
+        '''
         if mopts:
             self.opts = mopts
         else:
@@ -139,7 +157,8 @@ class LocalClient(object):
                 self.opts['sock_dir'],
                 self.opts['transport'],
                 opts=self.opts,
-                listen=False)
+                listen=False,
+                io_loop=io_loop)
         self.utils = salt.loader.utils(self.opts)
         self.functions = salt.loader.minion_mods(self.opts, utils=self.utils)
         self.returners = salt.loader.returners(self.opts, self.functions)
@@ -195,7 +214,7 @@ class LocalClient(object):
         # Looks like the timeout is invalid, use config
         return self.opts['timeout']
 
-    def gather_job_info(self, jid, tgt, tgt_type):
+    def gather_job_info(self, jid, tgt, tgt_type, **kwargs):
         '''
         Return the information about a given job
         '''
@@ -207,6 +226,7 @@ class LocalClient(object):
                                 arg=[jid],
                                 expr_form=tgt_type,
                                 timeout=timeout,
+                                **kwargs
                                )
 
         if 'jid' in pub_data:
@@ -359,7 +379,7 @@ class LocalClient(object):
             >>> SLC.cmd_subset('*', 'test.ping', sub=1)
             {'jerry': True}
         '''
-        group = self.cmd(tgt, 'sys.list_functions', expr_form=expr_form)
+        group = self.cmd(tgt, 'sys.list_functions', expr_form=expr_form, **kwargs)
         f_tgt = []
         for minion, ret in six.iteritems(group):
             if len(f_tgt) >= sub:
@@ -934,7 +954,7 @@ class LocalClient(object):
             # re-do the ping
             if time.time() > timeout_at and minions_running:
                 # since this is a new ping, no one has responded yet
-                jinfo = self.gather_job_info(jid, tgt, tgt_type)
+                jinfo = self.gather_job_info(jid, tgt, tgt_type, **kwargs)
                 minions_running = False
                 # if we weren't assigned any jid that means the master thinks
                 # we have nothing to send
@@ -1252,7 +1272,8 @@ class LocalClient(object):
                                          timeout=timeout,
                                          tgt=tgt,
                                          tgt_type=tgt_type,
-                                         expect_minions=(verbose or show_timeout)
+                                         expect_minions=(verbose or show_timeout),
+                                         **kwargs
                                          ):
             return_count = return_count + 1
             if progress:
@@ -1437,6 +1458,10 @@ class LocalClient(object):
                                                  master_uri=master_uri)
 
         try:
+            # Ensure that the event subscriber is connected.
+            # If not, we won't get a response, so error out
+            if not self.event.connect_pub(timeout=timeout):
+                raise SaltReqTimeoutError()
             payload = channel.send(payload_kwargs, timeout=timeout)
         except SaltReqTimeoutError:
             raise SaltReqTimeoutError(

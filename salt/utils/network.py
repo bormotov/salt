@@ -7,17 +7,12 @@ Define some generic socket functions for network modules
 from __future__ import absolute_import
 import os
 import re
-import shlex
 import socket
 import logging
 from string import ascii_letters, digits
 
 # Import 3rd-party libs
 import salt.ext.six as six
-if six.PY3:
-    import ipaddress
-else:
-    import salt.ext.ipaddress as ipaddress
 from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 # Attempt to import wmi
 try:
@@ -28,7 +23,7 @@ except ImportError:
 
 # Import salt libs
 import salt.utils
-from salt._compat import subprocess
+from salt._compat import subprocess, ipaddress
 
 log = logging.getLogger(__name__)
 
@@ -47,12 +42,6 @@ def sanitize_host(host):
 def isportopen(host, port):
     '''
     Return status of a port
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' network.isportopen 127.0.0.1 22
     '''
 
     if not 1 <= int(port) <= 65535:
@@ -67,12 +56,6 @@ def isportopen(host, port):
 def host_to_ip(host):
     '''
     Returns the IP address of a given hostname
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' network.host_to_ip example.com
     '''
     try:
         family, socktype, proto, canonname, sockaddr = socket.getaddrinfo(
@@ -271,12 +254,6 @@ def generate_minion_id():
     '''
     Returns a minion id after checking multiple sources for a FQDN.
     If no FQDN is found you may get an ip address
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' network.generate_minion_id
     '''
     possible_ids = get_hostnames()
 
@@ -314,12 +291,6 @@ def get_socket(addr, type=socket.SOCK_STREAM, proto=0):
 def get_fqhostname():
     '''
     Returns the fully qualified hostname
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' network.get_fqhostname
     '''
     l = []
     l.append(socket.getfqdn())
@@ -347,12 +318,6 @@ def get_fqhostname():
 def ip_to_host(ip):
     '''
     Returns the hostname of a given IP
-
-    CLI Example:
-
-    .. code-block:: bash
-
-        salt '*' network.ip_to_host 8.8.8.8
     '''
     try:
         hostname, aliaslist, ipaddrlist = socket.gethostbyaddr(ip)
@@ -1177,7 +1142,7 @@ def _freebsd_remotes_on(port, which_end):
     remotes = set()
 
     try:
-        cmd = shlex.split('sockstat -4 -c -p {0}'.format(port))
+        cmd = salt.utils.shlex_split('sockstat -4 -c -p {0}'.format(port))
         data = subprocess.check_output(cmd)  # pylint: disable=minimum-python-version
     except subprocess.CalledProcessError as ex:
         log.error('Failed "sockstat" with returncode = {0}'.format(ex.returncode))

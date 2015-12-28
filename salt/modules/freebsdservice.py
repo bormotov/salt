@@ -25,12 +25,12 @@ __virtualname__ = 'service'
 
 def __virtual__():
     '''
-    Only work on systems which default to systemd
+    Only work on FreeBSD
     '''
     # Disable on these platforms, specific service modules exist:
     if __grains__['os'] == 'FreeBSD':
         return __virtualname__
-    return False
+    return (False, 'The freebsdservice execution module cannot be loaded: only available on FreeBSD systems.')
 
 
 @decorators.memoize

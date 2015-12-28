@@ -19,7 +19,10 @@ def __virtual__():
     '''
     Only run on Darwin (OS X) systems
     '''
-    return __virtualname__ if __grains__['os'] == 'MacOS' else False
+    if __grains__['os'] == 'MacOS':
+        return __virtualname__
+    return (False, 'The darwin_sysctl execution module cannot be loaded: '
+            'only available on MacOS systems.')
 
 
 def show(config_file=False):
@@ -176,9 +179,11 @@ def persist(name, value, config='/etc/sysctl.conf', apply_change=False):
                     return 'Already set'
                 new_line = '{0}={1}'.format(name, value)
                 nlines.append(new_line)
+                nlines.append('\n')
                 edited = True
     if not edited:
         nlines.append('{0}={1}'.format(name, value))
+        nlines.append('\n')
     with salt.utils.fopen(config, 'w+') as ofile:
         ofile.writelines(nlines)
     # If apply_change=True, apply edits to system

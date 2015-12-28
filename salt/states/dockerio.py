@@ -3,6 +3,11 @@
 Manage Docker containers
 ========================
 
+.. deprecated:: 2015.8.0
+    Future feature development will be done only in :mod:`dockerng
+    <salt.states.dockerng>`. See the documentation for this module for
+    information on the deprecation path.
+
 `Docker <https://www.docker.io>`_
 is a lightweight, portable, self-sufficient software container
 wrapper. The base supported wrapper type is
@@ -13,8 +18,8 @@ wrapper. The base supported wrapper type is
 .. note::
 
     This state module requires
-    `docker-py <https://github.com/dotcloud/docker-py>`_
-    which supports `Docker Remote API version 1.6
+    `docker-py <https://github.com/dotcloud/docker-py>`_ version >= 0.6.0
+    which supports `Docker Remote API version 1.12
     <http://docs.docker.io/en/latest/reference/api/docker_remote_api_v1.6>`_.
 
 Available Functions

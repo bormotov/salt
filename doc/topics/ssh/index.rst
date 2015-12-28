@@ -1,3 +1,5 @@
+.. _salt-ssh:
+
 ========
 Salt SSH
 ========
@@ -33,7 +35,6 @@ Salt SSH Roster
 The roster system in Salt allows for remote minions to be easily defined.
 
 .. note::
-
     See the :doc:`Roster documentation </topics/ssh/roster>` for more details.
 
 Simply create the roster file, the default location is `/etc/salt/roster`:
@@ -56,9 +57,43 @@ address. A more elaborate roster can be created:
       host: 192.168.42.2
 
 .. note::
-
     sudo works only if NOPASSWD is set for user in /etc/sudoers:
     ``fred ALL=(ALL) NOPASSWD: ALL``
+
+Deploy ssh key for salt-ssh
+===========================
+
+By default, salt-ssh will generate key pairs for ssh, the default path will be
+/etc/salt/pki/master/ssh/salt-ssh.rsa
+
+You can use ssh-copy-id, (the OpenSSH key deployment tool) to deploy keys to your servers.
+
+.. code-block:: bash
+
+   ssh-copy-id -i /etc/salt/pki/master/ssh/salt-ssh.rsa.pub user@server.demo.com
+
+One could also create a simple shell script, named salt-ssh-copy-id.sh as follows:
+
+.. code-block:: bash
+
+   #!/bin/bash
+   if [ -z $1 ]; then
+      echo $0 user@host.com
+      exit 0
+   fi
+   ssh-copy-id -i /etc/salt/pki/master/ssh/salt-ssh.rsa.pub $1
+
+
+.. note::
+    Be certain to chmod +x salt-ssh-copy-id.sh.
+
+.. code-block:: bash
+
+   ./salt-ssh-copy-id.sh user@server1.host.com
+   ./salt-ssh-copy-id.sh user@server2.host.com
+
+Once keys are successfully deployed, salt-ssh can be used to control them.
+
 
 Calling Salt SSH
 ================

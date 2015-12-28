@@ -9,13 +9,13 @@ import os
 import re
 import sys
 import uuid
-import shlex
 import string
 
 # Import salt libs
 import salt.utils
 from salt.state import STATE_INTERNAL_KEYWORDS as _STATE_INTERNAL_KEYWORDS
 from salt.exceptions import SaltException
+from salt.ext import six
 
 import logging
 log = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def __virtual__():
     Only load the module if iptables is installed
     '''
     if not salt.utils.which('iptables'):
-        return False
+        return (False, 'The iptables execution module cannot be loaded: iptables not installed.')
 
     return True
 
@@ -80,8 +80,13 @@ def _conf(family='ipv4'):
             return '/var/lib/ip6tables/rules-save'
         else:
             return '/var/lib/iptables/rules-save'
+    elif __grains__['os_family'] == 'Suse':
+        # SuSE does not seem to use separate files for IPv4 and IPv6
+        return '/etc/sysconfig/scripts/SuSEfirewall2-custom'
     else:
-        return False
+        raise SaltException('Saving iptables to file is not' +
+                            ' supported on {0}.'.format(__grains__['os']) +
+                            ' Please file an issue with SaltStack')
 
 
 def version(family='ipv4'):
@@ -216,6 +221,17 @@ def build_rule(table='filter', chain=None, command=None, position='', full=None,
                 rule.append('--name {0}'.format(kwargs['name']))
         del kwargs['match']
 
+    if 'match-set' in kwargs:
+        if isinstance(kwargs['match-set'], six.string_types):
+            kwargs['match-set'] = [kwargs['match-set']]
+        for match_set in kwargs['match-set']:
+            negative_match_set = ''
+            if match_set.startswith('!') or match_set.startswith('not'):
+                negative_match_set = '! '
+                match_set = re.sub(bang_not_pat, '', match_set)
+            rule.append('-m set {0}--match-set {1}'.format(negative_match_set, match_set))
+        del kwargs['match-set']
+
     if 'connstate' in kwargs:
         if '-m state' not in rule:
             rule.append('-m state')
@@ -256,6 +272,9 @@ def build_rule(table='filter', chain=None, command=None, position='', full=None,
             del kwargs[multiport_arg]
 
     if 'comment' in kwargs:
+        if '-m comment' not in rule:
+            rule.append('-m comment')
+
         rule.append('--comment "{0}"'.format(kwargs['comment']))
         del kwargs['comment']
 
@@ -473,7 +492,7 @@ def get_saved_rules(conf_file=None, family='ipv4'):
         IPv6:
         salt '*' iptables.get_saved_rules family=ipv6
     '''
-    return _parse_conf(conf_file, family)
+    return _parse_conf(conf_file=conf_file, family=family)
 
 
 def get_rules(family='ipv4'):
@@ -924,7 +943,7 @@ def _parse_conf(conf_file=None, in_mem=False, family='ipv4'):
             ret[table][chain]['rules'] = []
             ret[table][chain]['rules_comment'] = {}
         elif line.startswith('-A'):
-            args = shlex.split(line)
+            args = salt.utils.shlex_split(line)
             index = 0
             while index + 1 < len(args):
                 swap = args[index] == '!' and args[index + 1].startswith('-')
@@ -1229,7 +1248,7 @@ def _parser():
     ## sctp
     add_arg('--chunk-types', dest='chunk-types', action='append')
     ## set
-    add_arg('--match-set', dest='match-set', action='append', nargs=2)
+    add_arg('--match-set', dest='match-set', action='append')
     add_arg('--return-nomatch', dest='return-nomatch', action='append')
     add_arg('--update-counters', dest='update-counters', action='append')
     add_arg('--update-subcounters', dest='update-subcounters', action='append')

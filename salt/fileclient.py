@@ -10,6 +10,7 @@ import logging
 import hashlib
 import os
 import shutil
+import ftplib
 
 # Import salt libs
 from salt.exceptions import (
@@ -27,6 +28,8 @@ import salt.utils.templates
 import salt.utils.url
 import salt.utils.gzip_util
 import salt.utils.http
+import salt.utils.s3
+from salt.utils.locales import sdecode
 from salt.utils.openstack.swift import SaltSwift
 
 # pylint: disable=no-name-in-module,import-error
@@ -60,6 +63,19 @@ class Client(object):
     def __init__(self, opts):
         self.opts = opts
         self.serial = salt.payload.Serial(self.opts)
+
+    # Add __setstate__ and __getstate__ so that the object may be
+    # deep copied. It normally can't be deep copied because its
+    # constructor requires an 'opts' parameter.
+    # The TCP transport needs to be able to deep copy this class
+    # due to 'salt.utils.context.ContextDict.clone'.
+    def __setstate__(self, state):
+        # This will polymorphically call __init__
+        # in the derived class.
+        self.__init__(state['opts'])
+
+    def __getstate__(self):
+        return {'opts': self.opts}
 
     def _check_proto(self, path):
         '''
@@ -212,7 +228,7 @@ class Client(object):
 
         ret = []
 
-        path = self._check_proto(path)
+        path = self._check_proto(sdecode(path))
         # We want to make sure files start with this *directory*, use
         # '/' explicitly because the master (that's generating the
         # list of files) only runs on POSIX
@@ -227,6 +243,7 @@ class Client(object):
         # go through the list of all files finding ones that are in
         # the target directory and caching them
         for fn_ in self.file_list(saltenv):
+            fn_ = sdecode(fn_)
             if fn_.strip() and fn_.startswith(path):
                 if salt.utils.check_include_exclude(
                         fn_, include_pat, exclude_pat):
@@ -250,6 +267,7 @@ class Client(object):
                 saltenv
             )
             for fn_ in self.file_list_emptydirs(saltenv):
+                fn_ = sdecode(fn_)
                 if fn_.startswith(path):
                     minion_dir = '{0}/{1}'.format(dest, fn_)
                     if not os.path.isdir(minion_dir):
@@ -512,8 +530,7 @@ class Client(object):
         ret.sort()
         return ret
 
-    def get_url(self, url, dest, makedirs=False, saltenv='base',
-                env=None, no_cache=False):
+    def get_url(self, url, dest, makedirs=False, saltenv='base', env=None, no_cache=False):
         '''
         Get a single file from a URL.
         '''
@@ -554,30 +571,54 @@ class Client(object):
 
         if url_data.scheme == 's3':
             try:
+                def s3_opt(key, default=None):
+                    '''Get value of s3.<key> from Minion config or from Pillar'''
+                    if 's3.' + key in self.opts:
+                        return self.opts['s3.' + key]
+                    try:
+                        return self.opts['pillar']['s3'][key]
+                    except (KeyError, TypeError):
+                        return default
                 salt.utils.s3.query(method='GET',
                                     bucket=url_data.netloc,
                                     path=url_data.path[1:],
                                     return_bin=False,
                                     local_file=dest,
                                     action=None,
-                                    key=self.opts.get('s3.key', None),
-                                    keyid=self.opts.get('s3.keyid', None),
-                                    service_url=self.opts.get('s3.service_url',
-                                                              None),
-                                    verify_ssl=self.opts.get('s3.verify_ssl',
-                                                              True),
-                                    location=self.opts.get('s3.location',
-                                                              None))
+                                    key=s3_opt('key'),
+                                    keyid=s3_opt('keyid'),
+                                    service_url=s3_opt('service_url'),
+                                    verify_ssl=s3_opt('verify_ssl', True),
+                                    location=s3_opt('location'))
                 return dest
-            except Exception:
-                raise MinionError('Could not fetch from {0}'.format(url))
+            except Exception as exc:
+                raise MinionError('Could not fetch from {0}. Exception: {1}'.format(url, exc))
+        if url_data.scheme == 'ftp':
+            try:
+                ftp = ftplib.FTP(url_data.hostname)
+                ftp.login()
+                with salt.utils.fopen(dest, 'wb') as fp_:
+                    ftp.retrbinary('RETR {0}'.format(url_data.path), fp_.write)
+                return dest
+            except Exception as exc:
+                raise MinionError('Could not retrieve {0} from FTP server. Exception: {1}'.format(url, exc))
 
         if url_data.scheme == 'swift':
             try:
-                swift_conn = SaltSwift(self.opts.get('keystone.user', None),
-                                       self.opts.get('keystone.tenant', None),
-                                       self.opts.get('keystone.auth_url', None),
-                                       self.opts.get('keystone.password', None))
+                def swift_opt(key, default):
+                    '''Get value of <key> from Minion config or from Pillar'''
+                    if key in self.opts:
+                        return self.opts[key]
+                    try:
+                        return self.opts['pillar'][key]
+                    except (KeyError, TypeError):
+                        return default
+
+                swift_conn = SaltSwift(swift_opt('keystone.user', None),
+                                       swift_opt('keystone.tenant', None),
+                                       swift_opt('keystone.auth_url', None),
+                                       swift_opt('keystone.password', None))
+
                 swift_conn.get_object(url_data.netloc,
                                       url_data.path[1:],
                                       dest)
@@ -588,7 +629,10 @@ class Client(object):
         get_kwargs = {}
         if url_data.username is not None \
                 and url_data.scheme in ('http', 'https'):
-            _, netloc = url_data.netloc.split('@', 1)
+            netloc = url_data.netloc
+            at_sign_pos = netloc.rfind('@')
+            if at_sign_pos != -1:
+                netloc = netloc[at_sign_pos + 1:]
             fixed_url = urlunparse(
                 (url_data.scheme, netloc, url_data.path,
                  url_data.params, url_data.query, url_data.fragment))
@@ -598,78 +642,21 @@ class Client(object):
 
         destfp = None
         try:
-            if no_cache:
-                result = []
-
-                def on_chunk(chunk):
-                    result.append(chunk)
-            else:
-                dest_tmp = "{0}.part".format(dest)
-                destfp = salt.utils.fopen(dest_tmp, 'wb')
-
-                def on_chunk(chunk):
-                    destfp.write(chunk)
-
             query = salt.utils.http.query(
                 fixed_url,
-                stream=True,
-                streaming_callback=on_chunk,
+                text=True,
                 username=url_data.username,
                 password=url_data.password,
                 **get_kwargs
             )
-
-            if 'handle' not in query:
+            if 'text' not in query:
                 raise MinionError('Error: {0}'.format(query['error']))
-
-            try:
-                content_length = int(query['handle'].headers['Content-Length'])
-            except (AttributeError, KeyError, ValueError):
-                # Shouldn't happen but don't let this raise an exception.
-                # Instead, just don't do content length checking below.
-                log.warning(
-                    'No Content-Length header in HTTP response from fetch of '
-                    '{0}, or Content-Length is non-numeric'.format(fixed_url)
-                )
-                content_length = None
-
             if no_cache:
-                content = ''.join(result)
-                if content_length is not None \
-                        and len(content) > content_length:
-                    return content[-content_length:]
-                else:
-                    return content
+                return query['body']
             else:
-                destfp.close()
-                destfp = None
-                dest_tmp_size = os.path.getsize(dest_tmp)
-                if content_length is not None \
-                        and dest_tmp_size > content_length:
-                    log.warning(
-                        'Size of file downloaded from {0} ({1}) does not '
-                        'match the Content-Length ({2}). This is probably due '
-                        'to an upstream bug in tornado '
-                        '(https://github.com/tornadoweb/tornado/issues/1518). '
-                        'Re-writing the file to correct this.'.format(
-                            fixed_url,
-                            dest_tmp_size,
-                            content_length
-                        )
-                    )
-                    dest_tmp_bak = dest_tmp + '.bak'
-                    salt.utils.files.rename(dest_tmp, dest_tmp_bak)
-                    with salt.utils.fopen(dest_tmp_bak, 'rb') as fp_bak:
-                        fp_bak.seek(dest_tmp_size - content_length)
-                        with salt.utils.fopen(dest_tmp, 'wb') as fp_new:
-                            while True:
-                                chunk = fp_bak.read(
-                                    self.opts['file_buffer_size']
-                                )
-                                if not chunk:
-                                    break
-                                fp_new.write(chunk)
-                    os.remove(dest_tmp_bak)
+                dest_tmp = "{0}.part".format(dest)
+                with salt.utils.fopen(dest_tmp, 'wb') as destfp:
+                    destfp.write(query['body'])
                 salt.utils.files.rename(dest_tmp, dest)
                 return dest
         except HTTPError as exc:
@@ -840,12 +827,8 @@ class LocalClient(Client):
                 os.path.join(path, prefix), followlinks=True
             ):
                 for fname in files:
-                    ret.append(
-                        os.path.relpath(
-                            os.path.join(root, fname),
-                            path
-                        )
-                    )
+                    relpath = os.path.relpath(os.path.join(root, fname), path)
+                    ret.append(sdecode(relpath))
         return ret
 
     def file_list_emptydirs(self, saltenv='base', prefix='', env=None):
@@ -872,7 +855,7 @@ class LocalClient(Client):
                 os.path.join(path, prefix), followlinks=True
             ):
                 if len(dirs) == 0 and len(files) == 0:
-                    ret.append(os.path.relpath(root, path))
+                    ret.append(sdecode(os.path.relpath(root, path)))
         return ret
 
     def dir_list(self, saltenv='base', prefix='', env=None):
@@ -898,7 +881,7 @@ class LocalClient(Client):
             for root, dirs, files in os.walk(
                 os.path.join(path, prefix), followlinks=True
             ):
-                ret.append(os.path.relpath(root, path))
+                ret.append(sdecode(os.path.relpath(root, path)))
         return ret
 
     def hash_file(self, path, saltenv='base', env=None):
